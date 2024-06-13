@@ -1,0 +1,2079 @@
+---
+title: "Plasma and Platelet lipidome Changes in Fabry Disease"
+subtitle: "Manuscript Figures and Tables"
+author: "Bo Burla"
+format: html
+---
+
+```{r setup, include=FALSE}
+#rstudioapi::restartSession()
+knitr::opts_chunk$set(warning = TRUE, include = FALSE)
+
+library(ggpattern)
+library(glue)
+library(rlang)
+library(gt)
+library(here)
+library(qvalue)
+library(ggsignif)
+library(ggrepel)
+library(ggpubr)
+library(patchwork)
+library(tidyverse)
+source(here("R/plot_functions.R"))
+source(here("R/lipid_names_functions.R"))
+
+```
+
+## lipidomics data preparation
+```{r data-lipidomics-prepare, message=FALSE, warning=FALSE, include=FALSE}
+
+## Run below line to reprocess data (calculation of concentrations from raw peak areas, and subsequent QC filtering)
+#rmarkdown::render("01_data-preprocessing.qmd", clean = TRUE, quiet = TRUE)
+
+d_annot_subjects <- read_csv(file = here("data/StudyMetadata/FabryPlatelet_AnnotSubjects_04Oct2022_V6.csv")) 
+
+d_Plasma_wide <- read_csv( here("data/processed/FabryP_PLASMA_Processed.csv")) 
+d_Plasma <-  d_Plasma_wide |>  
+    pivot_longer(cols = -SAMPLE_ID:-QC_TYPE, names_to = "Compound", values_to = "conc") |> 
+    rename(SubjectID = SAMPLE_ID)
+
+d_Serum_wide <- read_csv( here("data/processed/FabryP_SERUM_Processed.csv")) 
+d_Serum <-  d_Serum_wide |>  
+    pivot_longer(cols = -SAMPLE_ID:-QC_TYPE, names_to = "Compound", values_to = "conc") |> 
+    rename(SubjectID = SAMPLE_ID)
+
+d_PLT_wide <- read_csv(here("data/processed/FabryP_PLATELETS_Processed.csv"))  
+d_PLT <- d_PLT_wide |>  
+  pivot_longer(cols = -SAMPLE_ID:-QC_TYPE, names_to = "Compound", values_to = "conc")|> 
+  rename(SubjectID = SAMPLE_ID) |> 
+  mutate(conc = conc)
+
+
+d_PlasmaSerumPLT <- 
+  d_PLT |> 
+  bind_rows(d_Plasma) |> 
+  bind_rows(d_Serum) |> 
+  get_transition_info(add_sum_composition = TRUE, add_chain_info = TRUE) |> 
+  mutate(lipidClassSL = if_else(str_detect(lipidClassSL, "Sph"), "SPB", lipidClassSL),
+         lipidClassSL = if_else(lipidClassSL == "SM" & str_detect(Compound, "\\:0"), "SM 18:0;O2", lipidClassSL)) |>
+  unite(SphB, chain_1_C:chain_1_DB, sep = ":") |>
+  mutate(SphB = paste0("d",SphB)) |> 
+  unite(FAchain, chain_2_C:chain_2_DB, sep = ":") 
+
+
+contrasts_5g <- list(
+        c("Classic_M_ERT", "Ctrl_M"),
+        c("Classic_F_ERT", "Ctrl_F"),
+        c("Asymp_F_noERT", "Ctrl_F")
+      ) 
+
+contrasts_3g <- list(
+        c("Classic_ERT", "Control"),
+        c("Classic_ERT", "Asymp_noERT")
+      ) 
+
+contrasts_3g3 <- list(
+        c("Classic_ERT", "Control"),
+        c("Classic_ERT", "Asymp_noERT"),
+        c("Control", "Asymp_noERT")
+      ) 
+
+
+```
+
+
+## Data reformatting
+```{r data-reformat, message=FALSE, warning=FALSE, include=FALSE}
+col_ERT <- c("NO" = "#2b83ba", "YES" = "#ca0020") 
+col_Gender <- c("M" = "#2b83ba", "F" = "#ca0020") 
+#col_ExpGroup <- c("Ctrl_M" = "#2b83ba", "Ctrl_F" = "#2b83ba", "FD_M_ERT" = "#d6000c", "FD_F_ERT" = "#d6000c", "FD_F" = "#ff9430") 
+col_ExpGroup <- c("Ctrl_M" = "#365C89", "Ctrl_F" = "#365C89",
+               "Classic_M_ERT" = "#ed1313", "Classic_F_ERT" = "#ed1313", 
+               "LateOn_M_ERT" = "#a60000", "Asymp_F_noERT" = "#ebb25e") 
+col_StudyGroup <- c("Ctrl" = "#2b83ba", "FD" = "#d6000c") 
+
+
+
+d <- d_PlasmaSerumPLT |> # filter(panel_id == "Gb3" | panel_id == "Gb4"|panel_id == "GloboPanel"|panel_id == "SLpanel") |> 
+  #mutate(conc = if_else(Tissue == "PLT", conc , conc)) |> 
+  left_join(d_annot_subjects,by = "SubjectID") |> 
+  unite(col = "Group", StudyGroup, ERT,Onset, remove = FALSE) |> 
+  mutate(ERT = ifelse(ERT == "YES", "ERT", NA)) |>
+  unite(col = "ExpGroup", StudyGroup, Gender, ERT, Onset, sep = "_", remove = FALSE, na.rm = FALSE) |>
+  mutate(Group = str_replace(Group, "Later-Onset", "LateOn")) |> 
+  mutate_at(vars(ERT), as.character) %>% 
+  mutate(ExpGroup = str_replace(ExpGroup, "Later-Onset", "LateOn")) |> 
+  mutate(
+    lipidClassName = lipidClass, 
+    lipidClassSLName = lipidClassSL,
+    Compound = str_replace(Compound, "Hex3Cer", "Gb3")) 
+  
+
+d$Group <- recode_factor(d$Group,Ctrl_NO_NA = "Control", FD_YES_Classic = "Classic_ERT", FD_YES_LateOn = "LateOn_ERT",FD_NO_Classic = "Asymp_noERT", FD_NO_Benign = "Asymp_noERT") 
+d$ExpGroup <- recode_factor(d$ExpGroup,
+                            Ctrl_M_NA_NA = "Ctrl_M",
+                            Ctrl_F_NA_NA = "Ctrl_F", 
+                            FD_M_ERT_Classic = "Classic_M_ERT", 
+                            FD_M_ERT_LateOn = "LateOn_M_ERT",
+                            FD_F_ERT_Classic = "Classic_F_ERT", 
+                            FD_F_NA_Classic = "Asymp_F_noERT", 
+                            FD_F_NA_Benign = "Asymp_F_noERT") 
+
+d$StudyGroup <- factor(d$StudyGroup, c("Ctrl","FD"))
+
+d$Gender <- factor(d$Gender, c("M","F"))
+
+d <- d |> mutate(lipidClassSL = ifelse(lipidClass == "SPBP O2", "SPBP O2", lipidClassSL)) 
+d <- d |> mutate(lipidClassSL = ifelse(lipidClass == "SPB O2", "SPB O2", lipidClassSL))
+d <- d |> mutate(lipidClassSL = ifelse(lipidClassBase == "SM_sum", "SM (184)", lipidClassSL))
+
+d_sum <- d |>
+  #mutate(lipidClassSL = ifelse(lipidClass == "S1P", "S1P d", lipidClassSL)) |> 
+  group_by(
+    Gender,StudyGroup,Group, ExpGroup,Tissue,SubjectID,lipidClassBase, lipidClass, lipidClassSL, AlbuminCreatineRatio, CardioScore, OrganScoreA, MutationLabel) |>
+  summarise(conc = sum(conc, na.rm = TRUE)) |>
+  #filter(!(lipidClassSL != "SM 18:0;O2")) |> 
+  ungroup() |>
+  mutate(
+    #conc = ifelse(Tissue == "Plasma", conc, conc),
+    lipidClassName = lipidClass, 
+    lipidClassSLName = lipidClassSL,
+    lipidClass = str_replace(lipidClass, "SPBP O2", "Total SPBP"),
+    lipidClass = str_replace(lipidClass, "SPB O2", "Total SPB"),
+    lipidClass = str_replace(lipidClass, "CAR", "Total CAR"),
+    lipidClass = str_replace(lipidClass, "GM3 O2", "Total GM3"),
+    lipidClass = str_replace(lipidClass, "SM O2", "Total SM"),
+    lipidClass = str_replace(lipidClass, "^Cer O2", "Total Cer d"),
+    lipidClass = str_replace(lipidClass, "HexCer O2", "Total HexCer"),
+    lipidClass = str_replace(lipidClass, "Hex2Cer O2", "Total Hex2Cer"),
+    lipidClass = str_replace(lipidClass, "Hex3Cer O2", "Total Gb3"),
+    lipidClass = str_replace(lipidClass, "Gb4 O2", "Total Gb4"),
+    lipidClass = str_replace(lipidClass, "Gb4 O2", "Total Gb4"),
+    lipidClassSL = str_replace(lipidClassSL, "HexCer", "Total HexCer"),
+    lipidClassSL = str_replace(lipidClassSL, "Hex2Cer", "Total Hex2Cer"),
+    lipidClassSL = str_replace(lipidClassSL, "Hex3Cer", "Total Gb3"),
+    lipidClassSL = str_replace(lipidClassSL, "Gb4", "Total Gb4"),
+    lipidClassSL = str_replace(lipidClassSL, "^Cer", "Total Cer"),
+    lipidClassSL = str_replace(lipidClassSL, "SM", "Total SM"),
+    lipidClassSL = str_replace(lipidClassSL, "GM3", "Total GM3")
+    #lipidClassName = ifelse(Tissue == "PLT", paste(lipidClass, "(PLT)"), paste(lipidClass, "(Plasma)")),
+    #lipidClassSLName = ifelse(Tissue == "PLT", paste(lipidClassSL, "(PLT)"), paste(lipidClassSL, "(Plasma)"))
+  )
+	
+
+ 
+
+d_sum_plot <- d_sum |> 
+  mutate(
+      #onc = ifelse(Tissue == "PLT", conc, conc), 
+       lipidClassName = str_remove(lipidClassName,"Total ")) # |> 
+  # filter(str_detect(lipidClassName, "Hex2Cer|Gb3|Gb4|S1P|GM3|CAR|Cer|HexCer"))
+
+
+
+d_sum_plot$lipidClassName <- forcats::fct_relevel(d_sum_plot$lipidClassName, c("Hex2Cer", "Gb3", "Gb4", "SPBP"))
+d_sum_plot <- d_sum_plot |> arrange(lipidClassName)
+d_sum_plot$lipidClassSLName <- as_factor(d_sum_plot$lipidClassSLName)
+d_sum_plot$ExpGroup <- factor(d_sum_plot$ExpGroup, c("Ctrl_M", "Classic_M_ERT","LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+
+
+d_sum_total <- d_sum |> 
+  group_by(lipidClass, lipidClassName, lipidClassBase,Tissue, Gender, SubjectID, ExpGroup, Group, StudyGroup) |> 
+  summarise(conc = sum(conc, na.rm = TRUE)) |> 
+    mutate(
+      lipidClassSLName = lipidClassName
+  )
+
+get_FC <- function(dat, feature, group,condition, reference) {
+  
+  dat <- dat |>
+    mutate(
+      {{feature}} := str_replace({{feature}}, "Hex2Cer", "Hex2Cer"),
+      {{feature}} := str_replace({{feature}}, "Hex3Cer", "Gb3"),
+      {{feature}} := str_replace({{feature}}, "Gb4", "Gb4"),
+  )
+  
+  d_FC <- dat |> 
+      group_by({{feature}}, Gender, Tissue) |>  
+      summarise(
+        FC = mean(conc[{{group}} == condition])/mean(conc[{{group}} == reference]), 
+        log2FC = log2(FC), 
+        absFC = abs(FC) ,
+        log2FC = log2(FC),
+        p_value = t.test(
+          x = log10(conc[{{group}} == condition]),
+          y = log10(conc[{{group}} == reference]),
+          paired = FALSE,
+          var.equal = FALSE)$p.value,
+        p_value_wilcox   = wilcox.test(
+          x = (conc[{{group}} == condition]),
+          y = (conc[{{group}} == reference]),
+          paired = FALSE,
+          var.equal = FALSE)$p.value
+        )
+  d_FC
+}
+
+```
+
+## Clinical lab values data preparation
+```{r data-clinlab-prepare, message=FALSE, warning=FALSE, include=FALSE}
+
+d_clin_raw <- read_csv(here("data/StudyMetadata/FabryPlatelet_Subject_Metatadata_ClinParam_V1.csv")) 
+  
+calc_eGFR <- function(Creatinine, Sex, Age) {
+  res <- 142 * min(Creatinine*0.0113/if_else(Sex == "F", 0.7,0.9),1)^(if_else(Sex == "F", -0.241, -0.302)) *
+  max(Creatinine*0.0113/if_else(Sex == "F", 0.7,0.9),1)^(-1.200) * 
+  0.9938^Age * if_else(Sex == "F", 1.012 ,1)
+  res
+}
+
+
+d_clin_wide <- d_annot_subjects |>  
+  left_join(d_clin_raw,by = "SubjectID") |>
+  rowwise() |> 
+  mutate(eGFR = calc_eGFR(Creatinin, Gender, Age)) |> 
+  ungroup() |> 
+  unite(col = "Group", StudyGroup, ERT,Onset, remove = FALSE) |> 
+  mutate(ERT = ifelse(ERT == "YES", "ERT", NA)) |>
+  unite(col = "ExpGroup", StudyGroup, Gender, ERT, Onset, sep = "_", remove = FALSE, na.rm = FALSE) |>
+  mutate(Group = str_replace(Group, "Later-Onset", "LateOn")) |> 
+  mutate_at(vars(ERT), as.character) %>% 
+  mutate(ExpGroup = str_replace(ExpGroup, "Later-Onset", "LateOn")) |> 
+  mutate(`HDL/TC` = HDL/Cholesterin) |> ungroup() |> 
+  rename(TC = Cholesterin) |> 
+  relocate(Age, .before = Hb)
+
+d_clin_wide$ExpGroup <- recode_factor(d_clin_wide$ExpGroup,
+                            Ctrl_M_NA_NA = "Ctrl_M",
+                            Ctrl_F_NA_NA = "Ctrl_F", 
+                            FD_M_ERT_Classic = "Classic_M_ERT", 
+                            FD_M_ERT_LateOn = "LateOn_M_ERT",
+                            FD_F_ERT_Classic = "Classic_F_ERT", 
+                            FD_F_NA_Classic = "Asymp_F_noERT", 
+                            FD_F_NA_Benign = "Asymp_F_noERT") 
+    
+    
+d_clin_wide$Gender <- factor(d_clin_wide$Gender, c("M","F"))
+
+d_clin <- d_clin_wide |> 
+  pivot_longer(names_to = "Variable", values_to = "conc", cols = Age:`HDL/TC`)
+
+# d_clin_wide %>% dplyr::select(ExpGroup, Age, Hb:`HDL/TC`, -Normoblasts) |>  
+#   tbl_summary(by = ExpGroup, 
+#               type = list(everything() ~ "continuous" ),
+#               digits = list(all_continuous() ~ 1, PLT ~ 0, MCV ~ 0, MCH~0, MCHC ~0, HCT ~ 2, PCT ~ 2, Hb~0, CRP ~ 0, Age ~ 0, TC~2, HDL/TC ~ 2, LDL~2, HDL~2, TAG~2, eGFR ~2),
+#               missing = "no")  |> as_gt() |> gtsave(filename = "Table1_ClinParameters.png", expand = 10)
+
+```
+
+
+## Define dotplot function
+```{r fun-dotplot, message=FALSE, warning=FALSE, include=FALSE}
+stat_sum_df <- function(fun, geom="crossbar", ...) {
+    stat_summary(fun.data = fun, geom = geom, ...)
+}
+
+t_test_log2 <- function(x, y, ...){t.test(x = log2(x), y = log2(y), ...)}
+
+dotplot <- function(d, facet_var, grouping_var, color_var, color_list, shape_var, shape_list, stat_contrasts, point_size, stroke_width = 0.5, ncol = 8, nrow=NULL,
+                    font_x = 6, font_y = 5, font_strip = 6, withStats = FALSE, stat_format = "box", with_labels = FALSE, 
+                    label_size = 3.5,test = "t.test", sign_text_size = 3, label_col  = "SubjectID") {
+
+
+
+  if (length(d$Tissue |> unique()) > 1)
+    facet_f <- c("Tissue", facet_var)
+  else
+    facet_f <- c(facet_var)
+
+  pos <- position_jitterdodge(dodge.width = 0.6, jitter.width = 0.75, seed = 2)
+  
+  p <- ggplot(d, aes(x = {{grouping_var}}, y = conc, color = {{color_var}}, fill = {{color_var}}))
+
+  if (stat_format == "box"){
+    p <- p + geom_boxplot(position=position_dodge(.3), alpha=0.1, lwd=0.01, outlier.size = 0) 
+
+  } else if(stat_format == "hilow") {
+    p <- p + 
+      stat_sum_df("median_hilow", 
+                  position=position_dodge(.3), 
+                  mapping = aes(fill={{color_var}}), 
+                         alpha=0.25, width = .6, size = 0.001) +
+      stat_summary(aes(x = {{grouping_var}}, 
+                             y = conc,
+                             group = {{grouping_var}},
+                             fill={{color_var}}),
+                   fun=mean,
+                   fun.min =mean, 
+                   fun.max = mean, 
+                   geom="crossbar", 
+                   width=0.75, 
+                   size=0.2, 
+                   inherit.aes=TRUE,na.rm = TRUE) 
+  } else {
+    p <- p + #stat_sum_df("median_hilow", position=position_dodge(.3), mapping = aes(fill={{color_var}}), alpha=0.25, width = .6, size = 0.01) 
+        stat_sum_df("mean_sd", 
+                    position=position_dodge(.3), 
+                    mapping = aes(x = {{grouping_var}}, 
+                                  y = conc, group = {{grouping_var}}, 
+                                  fill={{color_var}},
+                                  color={{color_var}}), 
+                    alpha=0.15, width = .6, size = 0.001, color=NA) +   
+        stat_summary(mapping = aes(group = {{grouping_var}}),
+                     fun = mean, 
+                     fun.min = mean, 
+                     fun.max = mean, 
+                     geom="errorbar", 
+                     width=0.9, 
+                     size=.5, 
+                     alpha =0.88, 
+                     inherit.aes=TRUE,na.rm = TRUE) 
+  }
+    
+  
+  p <- p + 
+    geom_point(stroke = stroke_width, aes(shape={{shape_var}}), size = point_size, position = pos ) +
+    facet_wrap(facet_f, scales = "free_y", ncol = ncol, nrow = nrow) + 
+    scale_y_continuous(limits = c(0,NA), expand = expansion(mult = c(0.05, .12)))+
+    scale_color_manual(values = color_list ) + 
+    scale_fill_manual(values = color_list ) +
+    scale_shape_manual(values = shape_list)
+  
+  if (withStats) {
+    p <- p + ggsignif::geom_signif(
+      comparisons = stat_contrasts,
+      test = test,
+      #test.args = list(paired = FALSE, var.equal = FALSE),
+      step_increase = 0.12,
+      margin_top = 0.35,
+      tip_length = 0.03,
+      vjust = 0.3,
+      size = 0.14,
+      #annotations = formatC(annot_1, digits=3)
+      map_signif_level = c("***" = 0.001, "**" = 0.01, "*" = 0.05, "~" = 0.1, " " = 1),
+      #margin_top = 0.4,
+      textsize = sign_text_size,
+      color = "grey30"
+    )
+  }
+  
+  if (with_labels) {
+    p <- p + geom_text_repel(
+      #data = d |> group_by(Gender, Group, {{facet_var}}) |> top_n(3,wt = conc),
+      mapping = aes(label = {{label_col}}, group = {{shape_var}}),
+      position = pos,
+      size = label_size,
+      alpha = 0.9,
+      segment.size = .10,
+      segment.alpha = .8,
+      min.segment.length = 0, box.padding = 0.04
+    )
+  }
+          
+  p <- p + labs(x = "", y = "amol/cell")+
+    theme_bw(base_size = 7) + 
+    theme(
+      axis.text.y = element_text(size = font_y, margin = unit(c(0,0.2,0.0,0.0), "mm")),
+      axis.text.x = element_text(size = font_x), 
+      #axis.text.x = element_text(size = font_x, angle = 45, vjust = 1.1, hjust=1), 
+      axis.title.y = element_text(size = 6, face = "plain"),
+      axis.title.x = element_text(size = 6, face = "bold"), 
+      strip.text.x = element_text(size = font_strip, face = "bold", margin = unit(c(0.5,0.2,0.5,0.2), "mm")),
+      panel.grid = element_blank(),
+      #strip.background = element_blank(),
+      strip.background = element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+      
+      panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+      legend.title=element_text(size = font_x), 
+      legend.text=element_text(size = font_x),
+      legend.key.size = unit(2.5, "mm"),
+      plot.title = element_text(size = 8),
+      plot.margin = unit(c(0.5,2,0.5,1.0), "mm")
+    )
+  p
+}
+```
+
+
+
+
+## Set figure themes
+
+```{r plot-theme, message=FALSE, warning=FALSE, include=TRUE}
+# SETUP figures
+
+SINGLE_COL_WIDTH = 90/25.4
+DOUBLE_COL_WIDTH = 190/25.4
+ONEHALF_COL_WIDTH = 140/25.4
+
+col_Group <- c("Control" = "#365C89", "Classic_ERT" = "#ed1313", "LateOn_ERT" = "#a60000", "Asymp_noERT" = "#ebb25e") 
+contrasts <- list(
+        c("Classic_ERT", "Control"),
+        c("Classic_ERT", "Asymp_noERT"),
+        c("Asymp_noERT", "Control")
+      ) 
+labels_x_4short = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")
+labels_x_4long = c("Control" = "Ctrl", "Classic_ERT" = "Classic \n+ERT", "LateOn_ERT" = " Later\n+ERT", "Asymp_noERT" = "Asym")
+
+labels5g <- c("Ctrl_M" = "Ctrl\nM", "Classic_M_ERT" = "Clas\nM\n+ERT", "LateOn_M_ERT" = "LOn\nM\n+ERT", 
+              "Ctrl_F"="Ctrl\nF", "Classic_F_ERT" = "Clas\nF\n+ERT", "Asymp_F_noERT" = "Asy\nF")
+
+```
+## Fig 2 A-D: Plasma Gb3, GM3, S1P 
+```{r fig02ABCD-plasma, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+
+col_Group <- c("Control" = "#365C89", "Classic_ERT" = "#ed1313", "LateOn_ERT" = "#a60000", "Asymp_noERT" = "#ebb25e") 
+
+d$ExpGroup <- factor(d$ExpGroup, c("Ctrl_M", "Classic_M_ERT", "LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+
+p_Gb3_Plasma_Total <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total Gb3"), Tissue == "Plasma") |> 
+    mutate(lipidClassSL = forcats::fct_relevel(lipidClassSL, c("Total Gb3 18:1;O2", "Total Gb3 18:2;O2", "Total Gb3 16:1;O2"))), 
+  facet_var = "lipidClassSL",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 3, font_x = 6,font_y = 5, font_strip = 7, withStats = TRUE, test = "t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+    theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+
+
+
+sel_gb3 <- c("Gb3 18:2;O2/16:0", "Gb3 18:2;O2/18:0",  "Gb3 18:2;O2/22:0", "Gb3 18:2;O2/24:0", "Gb3 18:2;O2/24:1")
+sel_gb3b <- c("Gb3 18:1;O2/16:0", "Gb3 18:1;O2/18:0", "Gb3 18:1;O2/22:0", "Gb3 18:1;O2/24:0", "Gb3 18:1;O2/24:1")
+
+p_Gb3_Plasma_Molec <- dotplot(
+  d |> filter(Compound %in% c(sel_gb3, sel_gb3b), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(01, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        plot.margin = unit(c(0,0, 0,0), "mm"))
+
+p_LysoGb3_Serum_Molec <- dotplot(
+  d |> filter(Compound %in% c("LysoGb3 18:1;O2","LysoGb3 18:2;O2"), Tissue == "Serum"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(1, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        plot.margin = unit(c(0,0, 0,0), "mm"))
+
+p_Ga2_Serum_Molec <- dotplot(
+  d |> filter(Compound %in% c("Ga2 18:2;O2/16:0", "Ga2 18:2;O2/24:0"), Tissue == "Serum"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(1, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        plot.margin = unit(c(0,0, 0,0), "mm"))
+
+
+p_Gb4_Plasma_Molec <- dotplot(
+  d |> filter(Compound %in% c("Gb4 18:1;O2/16:0","Gb4 18:1;O2/22:0", "Gb4 18:1;O2/24:0","Gb4 18:1;O2/24:1", "Gb4 18:2;O2/16:0", "Gb4 18:2;O2/18:0"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(1, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        plot.margin = unit(c(0,0, 0,0), "mm"))
+
+
+p_LHex2_Serum_Molec <- dotplot(
+  d |> filter(Compound %in% c("LHex2Cer 18:1;O2"), Tissue == "Serum"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        axis.title.y = element_blank())
+
+p_SPB_Serum_Molec <- dotplot(
+  d |> filter(Compound %in% c("SPB 18:1;O2","SPB 18:2;O2"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+ 
+
+p_GM3_Plasma <- dotplot(
+  d_sum_plot |> 
+    filter(lipidClass %in% c("Total GM3"), Tissue == "Plasma") |> 
+    mutate(lipidClassSL = str_replace(lipidClassSL, "Total GM3 18:1;O2", "Total GM3 18:1;O2")) |> 
+    mutate(lipidClassSL = str_replace(lipidClassSL, "Total GM3 18:2;O2", "Total GM3 18:2;O2")), 
+  facet_var = "lipidClassSL",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 2, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2", 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, label_size = 1, sign_text_size = 3) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+  scale_x_discrete(labels = labels_x_4long) 
+
+
+
+p_S1P_Plasma <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total SPBP"), Tissue == "Plasma") |> mutate(lipidClass = "Total SPBP"), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 2, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",  
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel, label_size = 1, sign_text_size = 3) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+scale_x_discrete(labels = labels_x_4long)
+  #theme(plot.margin = unit(c(1.0,0.5,0.5,1.0), "mm"))
+
+
+d_S1P16 <- d |> filter(Compound == "SPBP 16:1;O2") |> mutate(lipidClassSL = "SPBP 16:1;O2")
+d_sum_temp <- d_sum |> bind_rows(d_S1P16)
+
+d_sum_temp$ExpGroup <- factor(d_sum_temp$ExpGroup, c("Ctrl_M", "Classic_M_ERT", "LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+d_sum_temp <- d_sum_temp |> arrange(ExpGroup)
+d_sum_temp$lipidClassSL <- factor(d_sum_temp$lipidClassSL, c("Total Cer 16:1;O2", "Total Cer 18:0;O2", "Total Cer 18:1;O2", "Total Cer 18:2;O2", "Total SM 16:1;O2", "Total SM 18:0;O2", "Total SM 18:1;O2","Total SM 18:2;O2","Total Hex1Cer 16:1;O2","Total Hex1Cer 18:1;O2","Total Hex1Cer 18:2;O2","Total Hex2Cer 18:1;O2","Total Hex2Cer 18:2;O2","Total GM3 18:1;O2", "Total GM3 18:2;O2", "SPBP 16:1;O2")) 
+
+
+
+```
+
+## Fig 2 E: Cer ratios  
+```{r fig02E-plasma, message=FALSE, warning=FALSE, include=TRUE}
+
+d_Cer_ratios <- d |>
+  mutate(Compound = if_else(Compound == "PC 38:5 b", "PC 16:0_22:5",Compound ),
+         Compound = if_else(Compound == "PC 36:6 b", "PC 14:0_22:6",Compound )) |> 
+  filter(Compound %in% c("PC 16:0_22:5", "PC 14:0_22:6", "Cer 18:1;O2/16:0","Cer 18:1;O2/18:0","Cer 18:1;O2/24:0", "Cer 18:1;O2/24:1")) |> 
+  group_by(Group, SubjectID, Tissue, Gender) |>  
+  summarise(
+     MutationLabel = MutationLabel[[1]],
+    `Cer 18:1;O2/16:0\nCer 18:1;O2/24:0` = conc[Compound == "Cer 18:1;O2/16:0"]/conc[Compound == "Cer 18:1;O2/24:0"], 
+    `Cer 18:1;O2/18:0\nCer 18:1;O2/24:0` = conc[Compound == "Cer 18:1;O2/18:0"]/conc[Compound == "Cer 18:1;O2/24:0"], 
+    `Cer 18:1;O2/24:1\nCer 18:1;O2/24:0` = conc[Compound == "Cer 18:1;O2/24:1"]/conc[Compound == "Cer 18:1;O2/24:0"], 
+    `Cer 18:1;O2/16:0\nPC 16:0_22:5` = conc[Compound == "Cer 18:1;O2/16:0"]/conc[Compound == "PC 16:0_22:5"], 
+    `Cer 18:1;O2/18:0\nPC 14:0_22:6` = conc[Compound == "Cer 18:1;O2/18:0"]/conc[Compound == "PC 14:0_22:6"]
+  ) |> 
+  pivot_longer(names_to = "ratio_no" ,values_to = "conc", `Cer 18:1;O2/16:0\nCer 18:1;O2/24:0`:`Cer 18:1;O2/18:0\nPC 14:0_22:6`) |> 
+  left_join(d_clin_wide |> dplyr::select(-Gender, -ExpGroup, -MutationLabel, -Group), by = c("SubjectID"="SubjectID"))
+
+ d_Cer_ratios$ratio_no <- as_factor(d_Cer_ratios$ratio_no)
+
+p_CerRatio_Plasma <- dotplot(
+  d_Cer_ratios |> filter(Tissue == "Plasma") |> 
+    filter(nchar(as.character(ratio_no)) > 20), 
+  facet_var = "ratio_no",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 8, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE, test="t_test_log2",  
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain")) + 
+  scale_x_discrete(labels = labels_x_4long)
+  #theme(panel.spacing.x = unit(-0, "mm"))
+
+
+```
+
+## Fig 2 A-E: Merge panels and save
+```{r fig02-merge-save, message=FALSE, warning=FALSE, include=TRUE}
+
+layout <- "
+AAA##
+BBBBB
+CCDDE
+FGG##
+HHHHH
+"
+p_Fig2_final <- 
+  (p_Gb3_Plasma_Total) / # + ggtitle('Total Gb3'))/
+  (p_Gb3_Plasma_Molec) / # + ggtitle('Gb3 species'))/
+  (p_LysoGb3_Serum_Molec) / # + ggtitle('Lyso-Gb3'))/  
+  (p_Ga2_Serum_Molec)  / #+ ggtitle('Ga2'))/
+  (p_LHex2_Serum_Molec) / # + ggtitle('Lyso-Ga2'))/
+  (p_S1P_Plasma) / # + ggtitle('S1P (SPBP)'))/
+  (p_GM3_Plasma) / # + ggtitle('Ganglioside GM3')) / 
+
+  (p_CerRatio_Plasma) + # + ggtitle('Ceramide Ratios') +
+  plot_layout(design = layout, heights = c(20, 42, 20, 20, 20)) +
+  #plot_layout(heights = c(25,10, 10, 25))  + 
+  plot_annotation(tag_levels = list(c("A", "B", "C", "D", "E","F", "G", "H", "I", "J"))) & 
+  theme(
+    #plot.margin = unit(c(0,0,0,0),'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -1),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+ggsave(p_Fig2_final, device = "pdf",  dpi = 600,
+       width = DOUBLE_COL_WIDTH * 0.9, height = 250/25.4,
+       filename = here("output/Fig2_Plasma_RAW.pdf"))
+
+```
+
+
+
+## Fig 3 AB: Platelet Gb3
+
+```{r fig03AB-platelets, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+
+
+p_Gb3_PLT_Total <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total Gb3"), !str_detect(lipidClassSLName, "16:1;O2"), Tissue == "PLT"), 
+  facet_var = "lipidClassSL",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 2, font_x = 5,font_y = 4, font_strip = 7, withStats = TRUE, test="t_test_log2", sign_text_size = 3, label_size = 1, 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel) + ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long)  
+
+sel_gb3 <- c("Gb3 18:1;O2/16:0", "Gb3 18:1;O2/24:0", "Gb3 18:2;O2/24:0", "Gb3 18:2;O2/16:0")
+
+p_Gb3_PLT_Molec <- dotplot(
+  d |> filter(Compound %in% c(sel_gb3, sel_gb3), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 4, font_x = 5,font_y = 4, font_strip = 7, withStats = TRUE, test="t_test_log2", sign_text_size = 3, label_size = 1,  
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel) + ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) 
+  # theme(panel.spacing.x = unit(2, "mm"),
+  #       axis.ticks.length=unit(0.3, "mm")) 
+
+
+p_LysoGb3_PLT_Molec <- dotplot(
+  d_sum_plot |> filter(str_detect(lipidClass, "LysoGb3"), Tissue == "PLT") |>  mutate(conc = conc *1000), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("zmol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+p_LHex2Cer_PLT_Molec <- dotplot(
+  d |> filter(Compound %in% c("LHex2Cer 18:1;O2"), Tissue == "PLT") |>  mutate(conc = conc *1000), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("zmol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+
+```
+## Fig 3 CD: Comparison platelet vs plasma Gb3
+
+```{r fig03C-compare-plt-plasma, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+plot_comparison <- function(d, facet_var, label_x_pos,label_y_pos){
+   ggplot(d, aes(x = Plasma, y = PLT)) +
+    geom_point(aes(color = Group), size=1.3, stroke = .6) + 
+    facet_wrap(vars({{facet_var}}), scales = "free", ncol = 2) +
+    scale_color_manual(values = col_Group ) +
+    scale_fill_manual(values = col_Group ) +
+    geom_smooth(method = "lm", size = 0.5, color = "#94002c", level = 0.95, se = TRUE, fill = "#d9dbdb") +
+    #scale_x_continuous(limits = c(0, NA),oob = scales::squish_infinite)+
+    #scale_y_continuous(limits = c(0, NA),oob = scales::squish_infinite)+
+    stat_cor(p.accuracy = 0.001, r.accuracy = 0.01, method = "pearson", label.x.npc = label_x_pos, label.y.npc = label_y_pos, size = 1.25, lineheight = 13.5) +
+    #scale_shape_manual(values = c("Ctrl" = 19, "FD" = 5)) +
+    labs(x = "Plasma (µmol/L)", y = "Platelets (amol/cell)") +
+    theme_bw(base_size = 7) + 
+    theme(
+      axis.text.y = element_text(size = 4, margin = unit(c(0,0,0.0,0.0), "mm")),
+      axis.text.x = element_text(size = 4), 
+      #axis.text.x = element_text(size = font_x, angle = 45, vjust = 1.1, hjust=1), 
+      axis.title.y = element_text(size = 6, face = "plain"),
+      axis.title.x = element_text(size = 6, face = "plain"), 
+      strip.text.x = element_text(size = 7, face = "bold", margin = unit(c(0.5,0.2,0.5,0.2), "mm")),
+      panel.grid = element_blank(),
+      #strip.background = element_blank(),
+      strip.background = element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+      
+      panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+      legend.title=element_text(size = 5), 
+      legend.text=element_text(size = 5),
+      legend.key.size = unit(2.5, "mm"),
+      plot.title = element_text(size = 7),
+      ) +   
+    theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"),
+        plot.margin = unit(c(0.5,3,0.5,1.0), "mm"))
+
+}
+
+d_gb3_comp <- d_sum_plot |> 
+  filter(lipidClassSL %in% c("Total Gb3 18:1;O2","Total Gb3 18:2;O2")) |> 
+  mutate(Compound = lipidClassSL, 
+         conc = conc*1) |> 
+  bind_rows(d |> filter(Compound %in% c("Gb3 18:1;O2/16:0", "Gb3 18:2;O2/16:0"))) |> 
+  dplyr::select(SubjectID, Tissue, Compound, Group, ExpGroup, conc) |> 
+  filter(Tissue != "Serum") |> 
+  pivot_wider(names_from = "Tissue", values_from = "conc") |> 
+  remove_missing() |> 
+  mutate(Compound = factor(Compound, c("Total Gb3 18:1;O2", "Total Gb3 18:2;O2","Gb3 18:1;O2/16:0", "Gb3 18:2;O2/16:0")))
+
+p_Gb3PLTvsPLASMA <- plot_comparison(d_gb3_comp, Compound,label_x_pos = 0.5, label_y_pos = 0.95) + theme(legend.position = "none") 
+
+
+```
+
+
+```{r plot03EF-C16SL-LCAR, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+d_Gb3_cv <- d |> 
+  filter(Group != "Asymp_noERT", Tissue != "Serum") |> 
+  filter(str_detect(Compound, "^Gb3")) |> 
+  filter(Tissue != "Serum") |> 
+  mutate(Compound = str_replace(Compound, " \\(a\\)", "")) |> 
+  group_by(Compound, StudyGroup, Tissue) |> 
+  summarise(
+    CVb = sd(conc, na.rm = T)/mean(conc, na.rm = T)*100,
+    Min = min(conc, na.rm = T),
+    Max = max(conc, na.rm = T),
+    FoldDifference = max(conc, na.rm = T)/min(conc, na.rm = T)
+  ) |> 
+ungroup() |>  
+group_by(Compound,StudyGroup) |> 
+filter(n() == 2) |> 
+arrange(desc(CVb),.by_group = FALSE) 
+
+d_Gb3_cv$CompoundF <- factor(d_Gb3_cv$Compound, ordered = FALSE, levels = d_Gb3_cv$Compound[d_Gb3_cv$Tissue == "PLT" & d_Gb3_cv$StudyGroup == "Ctrl"])
+
+
+p_Gb3_CVs <- ggplot(data = d_Gb3_cv, aes(x=CompoundF, y=CVb, color = Tissue, fill = Tissue, shape = StudyGroup)) + 
+  geom_point(position = position_dodge(0.8), size= 1.75, stroke = 0.7) +
+  geom_line(data = d_Gb3_cv %>% filter (StudyGroup == "Ctrl"), aes(x=CompoundF, y=CVb, color = Tissue, group = Tissue), 
+            na.rm = TRUE, inherit.aes = FALSE, linetype = "22", size = 0.5) +
+  scale_fill_manual(values = c("Plasma" = "#b3aa02", "PLT" = "#a83232"), name = NULL) +
+  scale_color_manual(values = c("Plasma" = "#b3aa02", "PLT" = "#a83232"), name = NULL) +
+  scale_shape_manual(values = c("Ctrl" = 19, "FD" = 5), name = NULL) +
+  scale_linetype('') +
+  scale_y_continuous(limits = c(0, 120),oob = scales::squish,
+                     breaks = seq(0,120,20)
+                     ) +
+  labs(x = '') +
+  guides(fill = guide_legend(label.position = "right", order = 1),
+         color = guide_legend(label.position = "right", order = 1), 
+         shape = guide_legend(label.position = "right",title = NULL, order = 2)) +
+  coord_flip() + 
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7, margin = unit(c(0,0.2,0.0,0.0), "mm")),
+    axis.title.x = element_text(size = 8, face = "bold", vjust = 2),
+    axis.title.y = element_text(size = 4),
+    axis.ticks.x = element_line(size=0.2),
+    axis.ticks.length.x =unit(0.5, "mm"),
+    axis.ticks.y = element_line(size=0.2),
+    axis.ticks.length.y = unit(0.5, "mm"),
+    
+    legend.position = c(0.85,.78), 
+    legend.text = element_text(size = 6), 
+    legend.title =element_text(size = 4, face = "bold"),
+    legend.key.size = unit(5, 'mm'), 
+    legend.spacing.y = unit(0.1, "mm"),
+    legend.margin = unit(c(0,0,0,0), unit="mm"),
+    legend.background = element_rect(fill=alpha('white', 0.0)),
+    
+    strip.text.x = element_blank(), #element_text(size = 7, face = "bold", margin = unit(c(0.5,0.2,0.5,0.2), "mm")),
+    strip.background = element_blank(), #element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+    
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_line(size = .1),
+    panel.border = element_rect(colour = "grey70", fill = NA, size = 0.5),
+    
+    plot.title = element_blank(), # element_text(size = 7),
+    plot.margin = ggplot2::margin(0.0,0.0,0,0.0)
+  ) + ylab("Coefficient of Variation (%CV)") #+ theme(plot.margin = unit(c(3, 0, 0, 0), "mm")) +
+
+```
+
+## Fig  3 EF: C16-SL and LCAR
+
+```{r plot03-ef}
+
+d_sum_totalSL <- d |> 
+  filter(lipidClass %in% c("Cer O2", "SM O2"), SphB == "d16:1") |> 
+  group_by(Gender, StudyGroup, Group,  ExpGroup, Tissue, SubjectID, SphB,MutationLabel) |> 
+  summarise(
+    n=n(),
+    MutationLabel = MutationLabel[[1]],
+    conc = sum(conc, rm.na = TRUE)
+  ) 
+
+d_sum_totalSL$ExpGroup <- factor(d_sum_totalSL$ExpGroup, c("Ctrl_M", "Classic_M_ERT", "LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+
+d_sum_totalSL$lipidClass <- "Total SL"
+
+
+
+
+d_sum_temp <- d_sum
+d_sum_temp$ExpGroup <- factor(d_sum_temp$ExpGroup, c("Ctrl_M", "Classic_M_ERT", "LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+d_sum_temp <- d_sum_temp |> arrange(ExpGroup)
+d_sum_temp$lipidClassSL <- factor(d_sum_temp$lipidClassSL, c("Total Cer 16:1;O2", "Total Cer 18:0;O2", "Total Cer 18:1;O2", "Total Cer 18:2;O2", "Total SM 16:1;O2", "Total SM 18:0;O2", "Total SM 18:1;O2","Total SM 18:2;O2","Total Hex1Cer 16:1;O2","Total Hex1Cer 18:1;O2","Total Hex1Cer 18:2;O2","Total Hex2Cer 18:1;O2","Total Hex2Cer 18:2;O2","Total GM3 18:1;O2", "Total GM3 18:2;O2")) 
+
+
+C16SL <-  c("Cer 18:1;O2/16:0", "Cer 18:2;O2/16:0", "GM3 18:2;O2/16:0")
+d_C16SL <- d |> filter(Tissue == "PLT") |> filter(Compound %in% C16SL)
+d_C16SL$Compound <- forcats::fct_relevel(d_C16SL$Compound, C16SL) 
+
+p_C16SL_PLT <- dotplot(
+  d_C16SL, 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, shape_var = Gender, stat_contrasts = contrasts_5g, 
+  shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 7, font_x = 5,font_y = 4, font_strip = 7, withStats = TRUE, test="t_test_log2", 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain")) + 
+  scale_x_discrete( labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"))
+
+
+p_S1P_PLT <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total SPBP"), Tissue == "PLT") |> mutate(lipidClass = "Total SPBP"), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 1, font_x = 5,font_y = 4, font_strip = 7, withStats = TRUE, 
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel, sign_text_size = 3, label_size = 1, test="t_test_log2") + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+  scale_x_discrete(labels = labels_x_4long) + 
+  theme(plot.margin = unit(c(1.0,0.5,0.5,1.0), "mm"))
+
+
+p_SPB_PLT_Molec <- dotplot(
+  d |> filter(Compound %in% c("SPB 18:1;O2"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(2, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+
+p_CAR_PLT <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total CAR"), Tissue == "PLT") |> mutate(lipidClass = "Total CAR") |> filter(conc != 0), 
+  facet_var = "lipidClass",grouping_var = Group, with_labels = T, label_col = MutationLabel, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 2, font_x = 5, font_y = 4, font_strip = 7, test="t_test_log2", 
+  withStats = TRUE, stat_format = "Mean", sign_text_size = 3, label_size = 1) +
+  ylab("amol/platelet") + theme(legend.position = "none") + xlab("") +  #theme(axis.text.x = element_text(size = 5, face = "plain")) +
+  scale_y_continuous(limits = c(0,23), expand = expansion(mult = c(0,0.07)))  + 
+  scale_x_discrete(labels = labels_x_4long) + 
+  theme(axis.title.y = element_text(size = 6, face = "plain")) 
+
+p_CAR_PLT_181 <- dotplot(
+  d |> filter(Compound %in% c("CAR 18:1"), Tissue == "PLT") |> remove_missing(na.rm = TRUE, vars = c("conc")), 
+  facet_var = "Compound",grouping_var = Group, with_labels = T, label_col = MutationLabel, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 2, font_x = 5, font_y = 4, font_strip = 7, test="t_test_log2",  
+  withStats = TRUE, stat_format = "Mean",sign_text_size = 3, label_size = 1) +
+  scale_x_discrete(labels = labels_x_4long) + 
+  ylab("amol/platelet") + theme(legend.position = "none") + xlab("") +  #theme(axis.text.x = element_text(size = 5, face = "plain")) +
+    #scale_y_continuous(limits = c(0,4), expand = expansion(mult = c(0,0.12)))  + 
+  theme(axis.title.y = element_text(size = 6, face = "plain")) 
+
+
+contrastsScore <- list(c("Control", "2-3"), c("0", "2-3"), c("1", "2-3"))
+
+d_CAR <- d_sum_plot |> filter(lipidClass == "Total CAR") |> filter(Tissue == "PLT") |> remove_missing(na.rm = TRUE, vars = c("conc")) |> droplevels() |> 
+  mutate(OrganScoreA = ifelse(OrganScoreA == 3, 2,OrganScoreA ))
+d_CAR$OrganScoreA <- factor(d_CAR$OrganScoreA)
+d_CAR$OrganScoreA <- forcats::fct_na_value_to_level(d_CAR$OrganScoreA, "Control")
+d_CAR$OrganScoreA <- forcats::fct_relevel(d_CAR$OrganScoreA, c("Control", "0", "1", "2"))
+d_CAR$OrganScoreA <- forcats::fct_recode(d_CAR$OrganScoreA, "2-3"="2")
+
+
+p_CARvsScore <- dotplot(
+  d_CAR |> mutate(lipidClass = "Total CAR") |> filter(conc != 0), 
+  facet_var = "lipidClass",grouping_var = OrganScoreA, color_var = Group, 
+  color_list =  col_Group , 
+  shape_var = Gender, 
+  stat_contrasts = contrastsScore, shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 1, font_x = 5, font_y = 4, font_strip = 7, withStats = TRUE, sign_text_size = 3, label_size = 1, 
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel, test="t_test_log2") + ylab("amol/platelet")+ 
+  xlab("Number of organs affected") +
+  scale_y_continuous(limits = c(0,25), expand = expansion(mult = c(0,0.08))) +
+  scale_shape_manual(values = c(19,1), guide="none") +
+  theme_bw(base_size = 7) + 
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = labels_x_4long) + 
+  theme(
+      axis.text.y = element_text(size = 5, margin = unit(c(0,0,0.0,0.0), "mm")),
+      axis.text.x = element_text(size = 6, face = "plain"), 
+      #axis.text.x = element_text(size = font_x, angle = 45, vjust = 1.1, hjust=1), 
+      axis.title.y = element_text(size = 6, face = "plain"),
+      axis.title.x = element_text(size = 6, face = "bold"), 
+      strip.text.x = element_text(size = 7, face = "bold", 
+      margin = ggplot2::margin(0.5,0.2,0.5,0.2, "mm")),
+      panel.grid = element_blank(),
+      strip.background = element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+      
+      panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+      plot.title = element_text(size = 7),
+      plot.margin = ggplot2::unit(c(0.0,0.2,0.0,1.5), "mm"))+
+  guides(color = guide_legend(override.aes = list(size=.2)))  
+
+
+contrastsScore <- list(c("0", "1"), c("Control", "1"), c("Control", "2-3"), c("0", "2-3"), c("1", "2-3"))
+
+d_CAR_molec <- d |> filter(lipidClass == "CAR") |> filter(Tissue == "PLT") |> droplevels() |> 
+  mutate(OrganScoreA = ifelse(OrganScoreA == 3, 2,OrganScoreA ))
+d_CAR_molec$OrganScoreA <- factor(d_CAR_molec$OrganScoreA)
+d_CAR_molec$OrganScoreA <- forcats::fct_na_value_to_level(d_CAR_molec$OrganScoreA, "Control")
+d_CAR_molec$OrganScoreA <- forcats::fct_relevel(d_CAR_molec$OrganScoreA, c("Control", "0", "1", "2"))
+d_CAR_molec$OrganScoreA <- forcats::fct_recode(d_CAR_molec$OrganScoreA, "2-3"="2")
+
+p_CARvsScore_molec_181 <- dotplot(
+  d_CAR_molec |> filter(Compound %in% c("CAR 18:1")) , 
+  facet_var = "Compound",grouping_var = OrganScoreA, color_var = Group, 
+  color_list =  col_Group ,
+  shape_var = Gender, 
+  stat_contrasts = contrastsScore, shape_list = c(19,1), point_size = 1.3, stroke = 0.6, ncol = 7, font_x = 5, font_y = 4, font_strip = 7, withStats = TRUE, sign_text_size = 3, label_size = 1, 
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel, test="t_test_log2") + ylab("amol/platelet")+ 
+  xlab("Number of organs affected") +
+  scale_shape_manual(values = c(19,1), guide="none") +
+  theme_bw(base_size = 7) + 
+  theme(legend.position = "right") +
+  scale_x_discrete(labels = labels_x_4long) + 
+   theme(legend.direction = "vertical", 
+      legend.box = "horizontal",
+      legend.text= element_text(size = 7, margin = unit(c(0.0,0.0,0,0.0), "mm")),
+      legend.title=element_blank(),
+      legend.spacing.x = unit(.8, "mm"),
+      legend.spacing =  unit(c(0.0,0.0,0.0,0.0), "mm"),
+      legend.background = element_rect(fill=alpha('white', 0.0)),
+      legend.key.size = unit(1.8, "mm")) + 
+  theme(
+      axis.text.y = element_text(size = 5, margin = unit(c(0,0,0.0,0.0), "mm")),
+      axis.text.x = element_text(size = 6, face = "plain"), 
+      #axis.text.x = element_text(size = font_x, angle = 45, vjust = 1.1, hjust=1), 
+      axis.title.y = element_text(size = 6, face = "plain"),
+      axis.title.x = element_text(size = 6, face = "bold"), 
+      strip.text.x = element_text(size = 7, face = "bold", 
+      margin = ggplot2::margin(0.5,0.2,0.5,0.2, "mm")),
+      panel.grid = element_blank(),
+      strip.background = element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+      
+      panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+      plot.title = element_text(size = 7),
+      plot.margin = ggplot2::unit(c(0.0,0.2,0.0,1.5), "mm"))+
+  guides(color = guide_legend(override.aes = list(size=.2))) 
+
+
+
+```
+## Fig 3 A-F: Merge panels and save
+
+```{r plot03-merge-save, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+p_Fig3 <- 
+  (p_Gb3_PLT_Total +
+  p_Gb3_PLT_Molec + plot_layout(widths = c(1, 2), guides = "collect")) / 
+  (p_Gb3PLTvsPLASMA + # + ggtitle('Plasma vs platelet Gb3')) +
+  p_Gb3_CVs  + #+ ggtitle('Between-subject variability of platelet Gb3'))  + 
+  plot_layout(widths = c(3.5, 3.5), heights = c(1), guides = "keep")) /
+  (
+    p_LysoGb3_PLT_Molec + # + ggtitle('LysoGb3')) +
+    p_S1P_PLT + # + ggtitle('S1P (SPBP)')) +
+    p_C16SL_PLT + # + ggtitle('C16:0-containing sphingolipids')) +  
+    plot_layout(widths = c(1,1, 4), heights = c(1), guides = "keep")
+  ) + 
+  (
+    
+    p_CAR_PLT + # + ggtitle('Long-chain acylcarnitines')) +
+    p_CAR_PLT_181 +
+    p_CARvsScore +  # + ggtitle('Long-chain acylcarnitines and FD severity'))  + 
+    p_CARvsScore_molec_181 + 
+    plot_spacer() + 
+    plot_layout(nrow = 1, widths = c(1, 1, 1, 1,1))
+  ) +
+  plot_layout(ncol = 1, heights = c(1, 2,1, 1)) + 
+  plot_annotation(tag_levels = list(c("A", "B", "C", "D", "E", "F", "G", "H", "", "I"))) & 
+  theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -2),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+
+ggsave(p_Fig3, device = "pdf",  dpi = 600,width = DOUBLE_COL_WIDTH*0.9, height = 222/25.4,
+       filename = here("output/Fig3_Platelets_RAW.pdf"))
+```
+
+
+## Fig S01: Clinical lab parameters
+
+```{r plot-S01-clinparam, echo=FALSE, fig.align="center", fig.height=2, fig.width=4, message=TRUE, warning=TRUE, dpi=300, tidy=TRUE}
+
+filt_clin <- c("Age", "RBC","HCT","Hb", "PLT", "PCT", "PWD", "MPV", "P-LCR","WBC", "ALAT","Albumin", "Creatinin", "eGFR", "CRP", "NT-proBNP", "LDL", "HDL", "TC", "HDL/TC", "TAG")
+
+# reorder and cap CRP at 50 for the plot
+d_clin_plot <- d_clin |> filter(Variable %in% filt_clin)  |> 
+  mutate(Variable = factor(Variable, filt_clin)) |> 
+  mutate(conc = if_else(Variable == "CRP" & conc > 50, Inf, conc))
+
+d_clin_plot$ExpGroup <- factor(d_clin_plot$ExpGroup, c("Ctrl_M", "Classic_M_ERT","LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+
+
+p_clinlab <- dotplot(
+  d_clin_plot, 
+  facet_var = "Variable", grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 5, font_x = 6,font_y = 6, font_strip = 8, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, test="t_test_log2", 
+  sign_text_size = 4.5, label_size = 1) + 
+  ylab("Unit (see legend)")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+ggsave(p_clinlab, device = "pdf", width = DOUBLE_COL_WIDTH*0.9, height = 150/25.4, dpi = 600,filename = here("output/FigS01_ClinLabValues.pdf"))
+
+```
+
+## Fig S02: Plasma Gb3 molecular species 
+
+```{r plot-s02-Gb3-molecspecies-plasma,  message=FALSE, warning=FALSE, include=TRUE}
+
+
+p_Gb3_plasma_5grp_sum <- dotplot(
+  d_sum_plot |> filter( Tissue == "Plasma", str_detect(lipidClassSL, "^Total Gb3")) |> mutate(lipidClassSL = str_remove(lipidClassSL, "Total ")), 
+  facet_var = "lipidClassSL",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 6, font_x = 5,font_y = 4, font_strip = 7, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 3.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm")) 
+
+p_Gb3_plasma_3grp <- dotplot(
+  d |> filter(str_detect(Compound, "^Gb3"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy"))
+
+p_Gb3_plasma_5grp <- dotplot(
+  d |> filter(str_detect(Compound, "^Gb3"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) 
+
+p_molec <- (
+  ((p_Gb3_plasma_5grp_sum + ggtitle('Plasma Gb3 (Male and female separated)'))+ plot_spacer() + plot_layout(nrow = 1, widths = c(1,1))) / 
+    (p_Gb3_plasma_3grp + ggtitle('Plasma Gb3 species (Male and female combined)')) / 
+    (p_Gb3_plasma_5grp + ggtitle('Plasma Gb3 species (Male and female separated)')) + 
+  plot_annotation(tag_levels = 'A')) + 
+  plot_layout(heights = unit(c(1, 2.7, 2.7), c('null'))) &
+  #plot_annotation(tag_levels = list(c("A", "B", "C", "D", "E", "F", "G", "", "H"))) & 
+  theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -3),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+ggsave(p_molec, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,filename = here("output/FigS02_MolecSpecies_Gb3_Plasma.pdf"))
+
+```
+
+
+## Fig S03: Platelet Gb3 molecular species 
+
+```{r plot-s03-Gb3-molecspecies,  message=FALSE, warning=FALSE, include=TRUE}
+
+p_Gb3_plt_5grp_sum <- dotplot(
+  d_sum_plot |> filter( Tissue == "PLT", str_detect(lipidClassSL, "^Total Gb3")) |> mutate(lipidClassSL = str_remove(lipidClassSL, "Total ")), 
+  facet_var = "lipidClassSL",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 6, font_x = 5,font_y = 4, font_strip = 7, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 3.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm")) 
+
+p_Gb3_plt_3grp <- dotplot(
+  d |> filter(str_detect(Compound, "^Gb3"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy"))
+
+p_Gb3_plt_5grp <- dotplot(
+  d |> filter(str_detect(Compound, "^Gb3"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) 
+
+p_molec <- (
+  ((p_Gb3_plt_5grp_sum + ggtitle('Platelet Gb3 (Male and female separated)'))+ plot_spacer() + plot_layout(nrow = 1, widths = c(1,1.2))) / 
+    (p_Gb3_plt_3grp + ggtitle('Platelet Gb3 species (Male and female combined)')) / 
+    (p_Gb3_plt_5grp + ggtitle('Platelet Gb3 species (Male and female separated)')) + 
+  plot_annotation(tag_levels = 'A')) + 
+  plot_layout(heights = unit(c(1, 2.7, 2.7), c('null'))) &
+  #plot_annotation(tag_levels = list(c("A", "B", "C", "D", "E", "F", "G", "", "H"))) & 
+  theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -3),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+ggsave(p_molec, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,filename = here("output/FigS03_MolecSpecies_Gb3_Platelets.pdf"))
+
+```
+
+## Fig S04: Gb3 range ratios (fold differences high/low)
+
+```{r plot-s04-Gb3-rangeratios}
+
+plot_rr <- function(d) {
+  ggplot() + 
+  geom_bar(data = d, aes(fill = Tissue, x=fct_reorder(Compound,FoldDifference, .desc = TRUE), y=FoldDifference),  alpha = 0.8, position="identity", stat="identity") +
+   scale_fill_manual(values = c("Plasma" = "#b3aa02", "PLT" = "#a83232"), drop=TRUE, name = NULL) +
+  scale_linetype('') +
+  #scale_y_continuous(expand = expansion(mult = c(0.0001,0.2),add = c(0,0))) +
+  ggh4x::facet_wrap2(vars(StudyGroup), nrow = 2) + 
+  labs(x = NULL, y = 'Fold difference between sample with lowest and sample with highest concentration') + 
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size = 8),
+    #axis.text.y = element_blank(),
+    axis.title.x = element_text(size = 8, face = "bold", vjust = 2),
+    axis.title.y = element_text(size = 8),
+    panel.grid.minor = element_blank(), 
+    panel.grid.major.x = element_line(size = .1),
+    panel.grid.major.y = element_blank(),
+    panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+    legend.position = c(0.81,.89), 
+    legend.text = element_text(size = 8), 
+    legend.title =element_text(size = 8, face = "bold"),
+    legend.key.size = unit(10, 'mm'), 
+    axis.ticks=element_line(size=0.2),
+    axis.ticks.length=unit(0.5, "mm"),
+    #strip.text.x = element_text(size = 7, face = "bold", margin = ggplot2::margin(0.5,0.2,0.5,0.2, "mm")),
+    #strip.background = element_blank(),
+    #strip.text.x = element_blank(),
+    legend.spacing.y = unit(-1, "mm"),
+    legend.background = element_rect(fill=alpha('white', 0.0)),
+    plot.title = element_text(size = 7),
+    plot.margin = unit(c(0.5,0.5,0.5,0.5), "mm")
+  ) + 
+  coord_flip()  # + theme(plot.margin = unit(c(3, 0, 0, 3), "mm")) 
+}
+
+p_Gb3_rr <- plot_rr( d_Gb3_cv |> arrange(desc(StudyGroup), FoldDifference) |>  droplevels() |> mutate(StudyGroup = if_else(StudyGroup == "FD", "ERT-treated FD", "Controls"))) + 
+  scale_y_continuous( breaks = c(0,100,200,300,400,500)) +
+  theme(axis.ticks.y = element_blank(),
+        plot.margin = unit(c(0, 0.5, 0, 0), "mm")
+        )
+ggsave(p_Gb3_rr, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 200/25.4, units = "in", dpi = 600,filename = here("output/FigS04_Gb3-rangeratios.pdf"))
+
+```
+
+## Fig S05: Lyso-Gb3  molecular species
+
+```{r plot-s05-LysoGb3-molecspecies,  message=FALSE, warning=FALSE, include=TRUE}
+p_LysoGb3_Serum_MolecAll <- dotplot(
+  d |> filter(Compound %in% c("LysoGb3 18:1;O2","LysoGb3 18:2;O2", 
+                              "LysoGb3(18)", "LysoGb3(-28)","LysoGb3(34)"), Tissue == "Serum"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, stat_contrasts = contrasts, 
+  shape_list = c(19,1), point_size = 1.2, stroke = .5, ncol = 5, font_x = 6,font_y = 4, font_strip = 7, withStats = TRUE,  test="t_test_log2",
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels_x_4long) +
+  theme(panel.spacing.x = unit(1, "mm"),
+        axis.ticks.length=unit(0.3, "mm"), 
+        plot.margin = unit(c(0,0, 0,0), "mm"))
+
+ggsave(p_LysoGb3_Serum_MolecAll, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 60/25.4, units = "in", dpi = 600,filename = here("output/FigS05_MolecSpecies_LysoGb3_Serum.pdf"))
+
+```
+
+
+## Fig S10: Molecular species S1P, GM3
+
+```{r plot-s10-S1P-GM3-molecspecies,  message=FALSE, warning=FALSE, include=TRUE}
+
+p_S1P_Plasma <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total SPBP"), Tissue == "Plasma") |> mutate(lipidClass = "Total SPBP"), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts_3g, 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 2, font_x = 5,font_y = 4, font_strip = 6, withStats = TRUE, 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, label_size = 1, test="t_test_log2") + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+  scale_x_discrete(labels = labels_x_4short) + 
+  scale_y_continuous(limits = c(0, 6)) +
+  theme(plot.margin = unit(c(1.0,0.5,0.5,1.0), "mm"))
+
+p_S1P_Serum <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total SPBP"), Tissue == "Serum") |> mutate(lipidClass = "Total SPBP"), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts_3g, 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 2, font_x = 5,font_y = 4, font_strip = 6, withStats = TRUE, 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, label_size = 1, test="t_test_log2") + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+  scale_x_discrete(labels = labels_x_4short) + 
+  scale_y_continuous(limits = c(0, 6)) +
+
+   theme(plot.margin = unit(c(1.0,0.5,0.5,1.0), "mm"))
+
+
+p_S1P_PLT <- dotplot(
+  d_sum_plot |> filter(lipidClass %in% c("Total SPBP"), Tissue == "PLT") |> mutate(lipidClass = "Total SPBP"), 
+  facet_var = "lipidClass",grouping_var = Group, color_var = Group, color_list = col_Group, shape_var = Gender, 
+  stat_contrasts = contrasts_3g, 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 2, font_x = 5,font_y = 4, font_strip = 6, withStats = TRUE, 
+  stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, label_size = 1, test="t_test_log2") + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + theme(axis.title.y = element_text(size = 6, face = "plain"))+ 
+  scale_x_discrete(labels = labels_x_4short) + 
+  theme(plot.margin = unit(c(1.0,0.5,0.5,1.0), "mm"))
+
+
+p_S1P_Plasma_Molec <- dotplot(
+  d |> filter(str_detect(Compound, "SPBP"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 9, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+p_S1P_Serum_Molec <- dotplot(
+  d |> filter(str_detect(Compound, "SPBP"), Tissue == "Serum"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 9, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L serum")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+
+
+p_S1P_PLT_Molec <- dotplot(
+  d |> filter(str_detect(Compound, "SPBP"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 9, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+p_GM3_plasma <- dotplot(
+  d |> filter(str_detect(Compound, "GM3"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 7, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy"))
+
+p_GM3_plt <- dotplot(
+  d |> filter(str_detect(Compound, "GM3"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 7, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy"))
+
+
+p_molec <- 
+  (((p_S1P_Plasma + ggtitle('Plasma S1P (SPBP)') + p_S1P_Plasma_Molec ) + plot_layout(nrow = 1, widths = c(1,7)))) /
+  (p_S1P_Serum + ggtitle('Serum S1P (SPBP)') + p_S1P_Serum_Molec  + plot_layout(nrow = 1, widths = c(1,7))) /
+ (p_S1P_PLT + ggtitle('Platelet S1P (SPBP)') + p_S1P_PLT_Molec  + plot_layout(nrow = 1, widths = c(1,7))) /
+   (p_GM3_plasma + ggtitle('Plasma GM3'))/(p_GM3_plt+ ggtitle('Platelet GM3')) +
+  plot_annotation(tag_levels = list(c("A", "", "B", "", "C", "", "D", "E", "F"))) +
+  plot_layout(heights = unit(c(0.5, 0.5, 0.5, 1, 1), c('null'))) &
+  theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -3),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+ggsave(p_molec, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,filename = here("output/FigS10_MolecSpecies-S1P-GM3.pdf"))
+```
+
+
+
+## Fig S11: Molecular species C14:0 PL and 16:1;O2 SL
+
+```{r plot-s11-molecspecies-C14-d161,  message=FALSE, warning=FALSE, include=TRUE}
+
+
+d_sum_temp <- d_sum |> bind_rows(d_S1P16)
+
+d_sum_temp$ExpGroup <- factor(d_sum_temp$ExpGroup, c("Ctrl_M", "Classic_M_ERT", "LateOn_M_ERT", "Ctrl_F", "Classic_F_ERT", "Asymp_F_noERT"))
+d_sum_temp <- d_sum_temp |> arrange(ExpGroup)
+d_sum_temp$lipidClassSL <- factor(d_sum_temp$lipidClassSL, c("Total Cer 16:1;O2", "Total Cer 18:0;O2", "Total Cer 18:1;O2", "Total Cer 18:2;O2", "Total SM 16:1;O2", "Total SM 18:0;O2", "Total SM 18:1;O2","Total SM 18:2;O2","Total Hex1Cer 16:1;O2","Total Hex1Cer 18:1;O2","Total Hex1Cer 18:2;O2","Total Hex2Cer 18:1;O2","Total Hex2Cer 18:2;O2","Total GM3 18:1;O2", "Total GM3 18:2;O2", "SPBP 16:1;O2")) 
+
+
+p_d16sum <- dotplot(
+  d_sum_temp |> filter(str_detect(lipidClassSL, "Total Cer 16\\:1|Total SM 16\\:1|SPBP 16"), Tissue == "Plasma"), 
+  facet_var = "lipidClassSL",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 6, font_x = 5,font_y = 4, font_strip = 7, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, test="t_test_log2", 
+  sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) 
+
+p_C14sum <- dotplot(
+  d |> filter(str_detect(Compound, "LPC 14\\:0|PC 28\\:0"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 1.3, stroke = .6, ncol = 6, font_x = 5,font_y = 4, font_strip = 7, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 3, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g)
+
+
+p_d16 <- dotplot(
+  d |> filter(str_detect(Compound, "16:0;O2|16:1;O2"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) 
+
+p_C14 <- dotplot(
+  d |> filter(str_detect(Compound, "LPC 14:0|PC 28:0|PC 30:0|PC 32:1 \\(a\\)|PC 32:2|PC 34:4|PC 36:6 \\(b\\)|PC O-32:2|PC O-34:4|PE 32:1 \\(a\\)"), Tissue == "Plasma"), 
+  facet_var = "Compound",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g)
+
+  p_C14d16 <- 
+    ((p_d16sum + ggtitle('C14:0-derived, LCB 16:1;O2-containing sphingolipids and C14:0-containing phosphatidylcholines')) + 
+    (p_C14sum)+ plot_layout(widths = c(1.5,1))) /
+    (p_d16 + ggtitle('Plasma 16:1;O2-containing sphingolipids'))  /
+    (p_C14 + ggtitle('Plasma C14:0-phospholipids')) + 
+  plot_annotation(tag_levels = 'A' ) + 
+  plot_layout(heights = unit(c(1.4, 4, 2), c('null'))) &
+  theme(plot.tag.position  = c(0, .98)) & 
+    theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -3),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+
+ggsave(p_C14d16, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 200/25.4, units = "in", dpi = 600,filename = here("output/FigS11_MolecSpecies-C14-d16.pdf"))
+
+```
+
+## Fig S12: Molecular species C16-SL and CAR
+
+```{r plot-s12-molecspecies-C16-CAR-plt,  message=FALSE, warning=FALSE, include=TRUE}
+
+p_C16 <- dotplot(
+  d |> filter(str_detect(Compound, "\\/16:0"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 7, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"),
+        axis.text.x = element_text(size = 4, angle = 45, vjust = 1.1, hjust=1))
+
+
+p_CAR <- dotplot(
+  d |> filter(str_detect(Compound, "CAR"), Tissue == "PLT"), 
+  facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+  shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 7, font_x = 5,font_y = 4, font_strip = 6, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"),
+        axis.text.x = element_text(size = 4, angle = 45, vjust = 1.1, hjust=1))
+
+
+# Score vs CAR
+
+p_CARvsScore_molec <- dotplot(
+  d_CAR_molec |> ungroup() , 
+  facet_var = "Compound",grouping_var = OrganScoreA, color_var = Group, 
+  color_list =  col_Group ,
+  shape_var = Gender, 
+  stat_contrasts = contrastsScore, shape_list = c(19,1), point_size = 0.8, stroke = 0.6, ncol = 7, font_x = 5, font_strip = 7, withStats = TRUE, label_size = 1, test="t_test_log2", 
+  stat_format = "Mean", with_labels = T, label_col = MutationLabel) + ylab("amol/platelet")+ 
+  xlab("Number of organs affected") +
+  scale_shape_manual(values = c(19,1), guide="none") +
+  theme_bw(base_size = 7) + 
+  theme(legend.position = c(.95,1.13)) +
+   theme(legend.direction = "vertical", 
+      legend.box = "horizontal",
+      legend.text= element_text(size = 5, margin = unit(c(0.0,0.0,0,0.0), "mm")),
+      legend.title=element_blank(),
+      legend.spacing.x = unit(.8, "mm"),
+      legend.margin =  unit(c(0.0,0.0,0.0,0.0), "mm"),
+      legend.background = element_rect(fill=alpha('white', 0.0)),
+      legend.key.size = unit(1.2, "mm")) + 
+    theme(
+      axis.text.y = element_text(size = 5, margin = unit(c(0,0,0.0,0.0), "mm")),
+      axis.text.x = element_text(size = 5, face = "plain"), 
+      #axis.text.x = element_text(size = font_x, angle = 45, vjust = 1.1, hjust=1), 
+      axis.title.y = element_text(size = 5, face = "plain"),
+      axis.title.x = element_text(size = 5, face = "bold"), 
+      strip.text.x = element_text(size = 6, face = "bold", 
+      margin = ggplot2::margin(0.1,0.1,0.1,0.1, "mm")),
+      panel.grid = element_blank(),
+      strip.background = element_rect(fill = "#F2F2F2", colour = "grey70", size = 0.3),
+      
+      panel.border = element_rect(colour = "grey70", fill = NA, size = 0.3),
+      plot.title = element_text(size = 7),
+      plot.margin = ggplot2::unit(c(0.0,0.2,0.0,1.5), "mm")) +
+  guides(color = guide_legend(override.aes = list(size=.2))) 
+
+
+
+p_molec <- (
+  (p_C16 + ggtitle('Platelet C16:0-containing sphingolipids')) / 
+  (p_CAR + ggtitle('Platelet CAR species')) + 
+  (p_CARvsScore_molec + ggtitle('Platelet CAR species versus number organs affected')) & 
+      plot_annotation(tag_levels = 'A')) + 
+  plot_layout(heights = unit(c(1, 0.7, 0.7), c('null'))) &
+  theme(plot.tag.position  = c(0, .95)) +
+    theme(
+    #plot.margin = margin(0,0,0,0,'pt'),
+    plot.tag = element_text(size = 12, face = "bold", hjust = 0, vjust = -3),
+    plot.tag.position = "topleft",
+    plot.title = element_text(size = 8, face = "plain", hjust = 0.0, vjust = 1.9))
+
+ggsave(p_molec, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,filename = here("output/FigS12_MolecSpecies-C16-CAR.pdf"))
+
+```
+
+
+# Fig S13: Volcano plot Ctrl vs Classic FD with male+female combined
+```{r plot-s13-volcano-plasma-plt}
+    
+d_FC <- d  |> 
+    mutate(Tissue = if_else(Tissue == "Plasma" | Tissue == "Serum", "Plasma_Serum", "PLT")) |> 
+    filter(Tissue %in% c("Plasma_Serum", "PLT"), !Compound %in% c("Gb4 18:1;O2/16:1")) |> 
+    group_by(lipidClass, lipidClassBase, Compound, Tissue) |>  
+    summarise(
+      FC = mean(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Control"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Classic_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[Group == "Classic_ERT"]), 
+        y = log2(conc[Group == "Control"]),
+        paired = FALSE)$p.value, na.rm = T) 
+
+
+
+d_FC <- d_FC |> 
+  group_by(Tissue) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"), 
+         q_value = qvalue(p_value, pfdr = FALSE)$qvalues)
+
+d_FC_SL <- d_FC |> 
+  filter(lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "SL") 
+
+d_FC_OL <- d_FC |> 
+  filter(!lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "PL/NL/CAR")
+
+
+#  hist(d_FC[d_FC$Tissue == "Plasma",]$q_value, breaks = 100, col = "green")
+# >=hist(d_FC[d_FC$Tissue == "Plasma",]$FDR, breaks = 100, col = "blue")
+
+p_volcano_plasma_SL <- volcano_plot_local(d_FC_SL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.4,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma/Serum Sphingolipids (Classic FD vs Ctrl)")
+
+
+p_volcano_plasma_OL <- volcano_plot_local(d_FC_OL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.4,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma Other Lipids (PL, NL, CAR)") +
+  theme(axis.title.y = element_blank())
+
+
+
+p_volcano_plt_SL <- volcano_plot_local(d_FC_SL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.4,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Sphingolipids")
+
+
+p_volcano_plt_OL <- volcano_plot_local(d_FC_OL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.4,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Other Lipids (PL, NL, CAR)") + 
+  theme(axis.title.y = element_blank())
+  #ylab("")
+
+p_volcano_plasma_plt <- (p_volcano_plasma_SL | p_volcano_plasma_OL) / (p_volcano_plt_SL | p_volcano_plt_OL) + 
+  patchwork::plot_annotation(tag_levels = 'A') & 
+  theme(plot.tag = element_text(size = 12, face = "plain"))
+
+
+
+ggsave(p_volcano_plasma_plt, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 175/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS13_Volcano_Ctrl-FD_Plasma-Plt.pdf"))
+
+```
+
+# Fig S14: Volcano plot Ctrl vs Classic FD, M and F separate (plasma/serum)
+```{r plot-s14-volcano-M-F-plasma}
+
+d_FC_M <- d  |> 
+      mutate(Tissue = if_else(Tissue == "Plasma" | Tissue == "Serum", "Plasma_Serum", "PLT")) |> 
+      filter(Tissue %in% c("Plasma_Serum", "PLT"), !Compound %in% c("Gb4 18:1;O2/16:1")) |> 
+      group_by(Compound, lipidClassBase, Tissue) |>  
+      summarise(
+        FC = mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_M"], na.rm = T), 
+        log2FC = log2(FC), 
+        absFC = abs(FC) ,
+        log2FC = log2(FC),
+        CV = sd(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T),
+        p_value = t.test(
+          x = log2(conc[ExpGroup == "Classic_M_ERT"]), 
+          y = log2(conc[ExpGroup == "Ctrl_M"]),
+          paired = FALSE)$p.value)
+
+d_FC_M_SL <- d_FC_M |> 
+  filter(lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "SL")
+
+d_FC_M_OL <- d_FC_M |> 
+  filter(!lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "PL/NL/CAR")
+
+d_FC_F <- d  |> 
+        mutate(Tissue = if_else(Tissue == "Plasma" | Tissue == "Serum", "Plasma_Serum", "PLT")) |> 
+      filter(Tissue %in% c("Plasma_Serum", "PLT"), !Compound %in% c("Gb4 18:1;O2/16:1")) |> 
+    group_by(Compound, lipidClassBase, Tissue) |>  
+    summarise(
+      FC = mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_F"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[ExpGroup == "Classic_F_ERT"]), 
+        y = log2(conc[ExpGroup == "Ctrl_F"]),
+        paired = FALSE)$p.value)
+
+
+d_FC_F_SL <- d_FC_F |> 
+  filter(lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "SL")
+
+d_FC_F_OL <- d_FC_F |> 
+  filter(!lipidClassBase %in% c("Cer", "GSL", "Gb4", "SM", "SPBP", "SPB", "LGSL")) |> 
+  group_by(Tissue) |> 
+  mutate(FDR_BH = p.adjust(p_value, method = "fdr"), 
+         FDR = qvalue(p_value, pfdr = FALSE)$qvalues, 
+         lipid_class = "PL/NL/CAR")
+
+p_volcano_plasma_M_SL <- volcano_plot_local(d_FC_M_SL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma/Serum Sphingolipids (Males)")
+
+
+p_volcano_plasma_M_OL <- volcano_plot_local(d_FC_M_OL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma Other Lipids (Males)") +
+  theme(axis.title.y = element_blank())
+
+p_volcano_plasma_F_SL <- volcano_plot_local(d_FC_F_SL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma/Serum Sphingolipids (Females)")
+
+
+p_volcano_plasma_F_OL <- volcano_plot_local(d_FC_F_OL |> filter(Tissue == "Plasma_Serum") |> filter(!str_detect(Compound, "LysoGb3")),
+                                 p_adjust = FALSE,sig_FC_min = 1.1, sig_p_value_min = 0.05, symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Plasma Other Lipids (Females)") +
+  theme(axis.title.y = element_blank())
+
+
+p_volcano_plt_M_SL <- volcano_plot_local(d_FC_M_SL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Sphingolipids (Males)")
+
+
+p_volcano_plt_M_OL <- volcano_plot_local(d_FC_M_OL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Other Lipids (Males)") + 
+  theme(axis.title.y = element_blank())
+  #ylab("")
+
+
+p_volcano_plt_F_SL <- volcano_plot_local(d_FC_F_SL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Sphingolipids (Females)")
+
+
+p_volcano_plt_F_OL <- volcano_plot_local(d_FC_F_OL |> filter(Tissue == "PLT"),
+                                 p_adjust = FALSE,sig_FC_min = 1.1,sig_p_value_min = 0.05,symmetric_x = TRUE,
+                                 x_min = -1,x_max = 3,point_size = 1.6,point_transparency = 1,scale_factor = 1,
+                                 scale_factor_species_label = 0.45,squared = TRUE,axistick = 1, highlight_fdr = TRUE) + 
+  ggtitle(label = "Platelet Other Lipids (Females)") + 
+  theme(axis.title.y = element_blank())
+  #ylab("")
+
+p_volcano_plasma_MF <- (p_volcano_plasma_M_SL | p_volcano_plasma_M_OL) / (p_volcano_plasma_F_SL | p_volcano_plasma_F_OL) + 
+  patchwork::plot_annotation(tag_levels = 'A') & 
+  theme(plot.tag = element_text(size = 12, face = "plain"))
+
+ggsave(p_volcano_plasma_MF, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 175/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS14_Volcano_Ctrl-FD_M-F_Plasma.pdf"))
+
+```
+
+# Fig S15: Volcano plot Ctrl vs Classic FD, M and F separate (platelets)
+```{r plot-s15-volcano-M-F-plasma}
+p_volcano_plt_MF <- (p_volcano_plt_M_SL | p_volcano_plt_M_OL) / (p_volcano_plt_F_SL | p_volcano_plt_F_OL) +   
+  patchwork::plot_annotation(tag_levels = 'A') & 
+  theme(plot.tag = element_text(size = 12, face = "plain"))
+
+
+ggsave(p_volcano_plt_MF, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 175/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS15_Volcano_Ctrl-FD_M-F_Platelets.pdf"))
+```
+
+# Fig S16: Significantly changed plasma lipid species
+```{r plot-s16_LipidspeciesPlasmaPlasma}
+plot_one_page <- function(data, n_row, n_col, title, y_lab){
+  dotplot(
+    data, 
+    facet_var = "Compound",grouping_var = Group, color_var = Group, color_list = col_Group, 
+    shape_var = Gender, stat_contrasts = contrasts_3g, test="t_test_log2", 
+    shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = n_col, font_x = 5,font_y = 4, font_strip = 5, 
+    withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+    sign_text_size = 2.5, label_size = 1) + 
+    ylab(y_lab)  + theme(legend.position = "none") + 
+    scale_x_discrete(labels = c("Control" = "Ctrl", "Classic_ERT" = "Clas\n+ERT", "LateOn_ERT" = "LOn\n+ERT", "Asymp_noERT" = "Asy")) +
+    theme(panel.spacing.x = unit(-0, "mm"),
+          axis.ticks.length=unit(0.3, "mm"),
+          axis.text.x = element_text(size = 4, angle = 45, vjust = 1.1, hjust=1)) + ggtitle(title)
+}
+
+rows_page = 8
+columns_page = 9
+
+
+d_plasma_sign <- d |>
+  filter(Tissue == "Plasma" | Tissue == "Serum") |> 
+  right_join(d_FC |> filter(Tissue == "Plasma_Serum", abs(log2FC) > log2(1.1), p_value < 0.05 ), by = "Compound")
+
+my_plots <- d_plasma_sign  |> 
+  group_by(Compound) |> 
+  mutate(page_no = ceiling(cur_group_id()/ (rows_page * columns_page))) |> 
+  group_by(page_no) %>%
+  nest() %>%
+  mutate(plt = map(data, ~ plot_one_page(.,n_row = rows_page, n_col = columns_page, title = "", y_lab = "µmol/L plasma/serum")))
+
+pdf(file = here("output/FigS16_SignChangesSpecies_PlasmaSerum.pdf"), onefile = TRUE, width = 2*SINGLE_COL_WIDTH, height = 225/25.4)
+my_plots$plt 
+dev.off()
+```
+
+# Fig S17: Significantly changed platelet lipid species
+```{r plot-s17_SigChanged-LipidspeciesPlatelets}
+
+rows_page = 9
+columns_page = 8
+
+d_plasma_sign <- d |> 
+  right_join(d_FC |> filter(Tissue == "PLT", abs(log2FC) > log2(1.1), p_value < 0.05 ))
+
+my_plots <- d_plasma_sign |> 
+  group_by(Compound) |> 
+  mutate(page_no = ceiling(cur_group_id()/ (rows_page * columns_page))) |> 
+  group_by(page_no) %>%
+  nest() %>%
+  mutate(plt = map(data, ~ plot_one_page(.,n_row = rows_page, n_col = columns_page, title = "", y_lab = "amol/platelet")))
+
+pdf(file = here("output/FigS17_SignChangedSpecies_PLT.pdf"), onefile = TRUE, width = 2*SINGLE_COL_WIDTH, height = 250/25.4)
+my_plots$plt 
+dev.off()
+```
+
+
+## Fig S18: Plasma all lipid classes, 6 groups
+
+```{r plot-S18-classes-plasma, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+d_sum_plot_temp <- d_sum_plot |> 
+  mutate(
+    lipidClassSL = case_when(
+      lipidClass == "Total S1P" & Tissue == "Serum" ~ "Total S1P (Serum)", 
+      lipidClass == "Total S1P" & Tissue == "Plasma" ~ "Total S1P (Plasma)",
+      TRUE ~ lipidClassSL), 
+    Tissue = if_else(Tissue == "Serum", "Plasma", Tissue))
+
+
+p_lipidclasses_6grp_plasma <- dotplot(
+  d_sum_plot_temp |> filter( Tissue == "Plasma"|Tissue == "Serum") |> mutate(lipidClassSL = str_remove(lipidClassSL, "Total ")), 
+  facet_var = "lipidClassSL",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("µmol/L plasma")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm"))
+
+ggsave(p_lipidclasses_6grp_plasma, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS18_TotalClass_PLASMA_MvsF.pdf"))
+```
+
+
+# Fig S19: Platelet all lipid classes, 6 groups
+
+```{r plot-S19-classes-plt, fig.height=2.362205, fig.width=3.543307, message=FALSE, warning=FALSE, include=TRUE}
+
+p_lipidclasses_6grp_plt <- dotplot(
+  d_sum_plot |> 
+    filter( Tissue == "PLT") |> 
+    mutate(lipidClassSL = str_remove(lipidClassSL, "Total ")) |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)), 
+  facet_var = "lipidClassSL",grouping_var = ExpGroup, color_var = ExpGroup, color_list = col_ExpGroup, 
+  shape_var = Gender, stat_contrasts = contrasts_5g, test="t_test_log2", 
+  shape_list = c(19,1), point_size = 0.8, stroke = .3, ncol = 6, font_x = 5,font_y = 4, font_strip = 5, 
+  withStats = TRUE, stat_format = "Mean", with_labels = TRUE, label_col = MutationLabel, 
+  sign_text_size = 2.5, label_size = 1) + 
+  ylab("amol/platelet")  + theme(legend.position = "none") + 
+  scale_x_discrete(labels = labels5g) +
+  theme(panel.spacing.x = unit(-0, "mm"),
+        axis.ticks.length=unit(0.3, "mm")) 
+ggsave(p_lipidclasses_6grp_plt, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 250/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS19_TotalClass_PLT_MvsF.pdf"))
+```
+
+## Fig S20: Power calculation for a single hypothesis test
+
+```{r plot-S20_PowerCalculation}
+
+df <- expand_grid(cv = seq(from = 10, to = 80, by = 10),
+                  effect_size = seq(from = 0, to = 100, by = 5))
+
+df <- df |> 
+  mutate(power = power.t.test(n = 9, delta = effect_size, 
+                              sd = cv, sig.level = 0.05)$power)
+
+
+p_power <- ggplot(df, aes(x = effect_size, y = power, color = factor(cv))) +
+  geom_hline(yintercept = 0.8, color = "blue", linewidth = 0.3, linetype = 1) +
+  geom_point(size = 1) + 
+  geom_line(linewidth = 0.75) + 
+  scale_x_continuous(name = "Effect size (%)", breaks = seq(0,100,10)) +
+  scale_y_continuous(name = "Power of test", breaks = seq(0,1,0.1)) +
+  scale_color_brewer(name = "%CV", palette = "Dark2") +
+
+  theme_linedraw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(colour = "grey78", linewidth = .6, linetype=3))
+        
+
+ggsave(p_power, device = "pdf", width =2*SINGLE_COL_WIDTH, height = 125/25.4, units = "in", dpi = 600,
+       filename = here("output/FigS20_PowerCalculation.pdf"))
+
+```
+
+
+
+# Fig S21: All plasma/serum lipid species
+
+```{r plot-S21_LipidspeciesPlasma}
+
+rows_page = 8
+columns_page = 8
+
+my_plots <- d |> filter(Tissue == "Plasma") |> 
+  group_by(Compound) |> 
+  mutate(page_no = ceiling(cur_group_id()/ (rows_page * columns_page))) |> 
+  group_by(page_no) %>%
+  nest() %>%
+  mutate(plt = map(data, ~ plot_one_page(.,n_row = rows_page, n_col = columns_page, title = "Fig S21: Plasma/serum lipid species", y_lab = "µmol/L plasma/serum")))
+
+pdf(file = here("output/FigS21_AllSpecies_PlasmaSerum.pdf"), onefile = TRUE, paper = "A4", width = 9, height = 250/25.4)
+my_plots$plt 
+dev.off()
+```
+
+# Fig S22: All platelet lipid species
+```{r plot-S22_LipidspeciesPlatelets}
+my_plots <- d |> filter(Tissue == "PLT") |> 
+  group_by(Compound) |> 
+  mutate(page_no = ceiling(cur_group_id()/ (rows_page * columns_page))) |> 
+  group_by(page_no) %>%
+  nest() %>%
+  mutate(plt = map(data, ~ plot_one_page(.,n_row = rows_page, n_col = columns_page, title = "Fig S22: Platelet lipid species", y_lab = "amol/platelet")))
+
+pdf(file = here("output/FigS22_AllSpecies_PLT.pdf"), onefile = TRUE, paper = "A4", width = 9, height = 250/25.4)
+my_plots$plt 
+dev.off()
+```
+
+## Statistical comparisons of lipid classes and sphinglipid subclasses
+
+```{r tests-stat-lipidclasses, message=FALSE, warning=FALSE, include=TRUE}
+d_FC_sum <- d_sum_total  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |>   # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT")) |> 
+    group_by(lipidClass, lipidClassBase, Tissue) |>  
+    summarise(
+      FC = mean(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Control"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Classic_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[Group == "Classic_ERT"]), 
+        y = log2(conc[Group == "Control"]),
+        paired = FALSE)$p.value, na.rm = T) |> 
+  ungroup()
+
+d_FC_sum <- d_FC_sum |> 
+  group_by(Tissue) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"))
+
+
+d_FC_sum_SLclass <- d_sum_plot  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |> # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT")) |> 
+    filter(str_detect(lipidClassSL, "Cer|GM3|Gb3|Gb4|SM|SPBP|SPB")) |> 
+    group_by(lipidClassSL, lipidClass,  Tissue) |>  
+    summarise(
+      FC = mean(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Control"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[Group == "Classic_ERT"], na.rm = T)/mean(conc[Group == "Classic_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[Group == "Classic_ERT"]), 
+        y = log2(conc[Group == "Control"]),
+        paired = FALSE)$p.value, na.rm = T) |> 
+  ungroup()
+
+d_FC_sum_SLclass <- d_FC_sum_SLclass |> 
+  group_by(Tissue) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"))
+
+# OK
+d_FC_M_sum <- d_sum_total  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |> # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT"), Gender == "M") |> 
+    group_by(lipidClass, Gender, lipidClassBase, Tissue) |>  
+    summarise(
+      FC = mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_M"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[ExpGroup == "Classic_M_ERT"]), 
+        y = log2(conc[ExpGroup == "Ctrl_M"]),
+        paired = FALSE)$p.value)|> 
+  ungroup()
+
+d_FC_M_sum <- d_FC_M_sum |> 
+  group_by(Tissue, Gender) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"))
+
+
+d_FC_F_sum <- d_sum_total  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |> # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT"), Gender == "F") |> 
+    group_by(lipidClass, Gender, lipidClassBase, Tissue) |> 
+    summarise(
+      FC = mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_F"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[ExpGroup == "Classic_F_ERT"]), 
+        y = log2(conc[ExpGroup == "Ctrl_F"]),
+        paired = FALSE)$p.value)|> 
+  ungroup()
+
+
+d_FC_F_sum <- d_FC_F_sum |> 
+  group_by(Tissue, Gender) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr") )
+
+
+d_FC_sum_SLclass_M <- d_sum_plot  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |> # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT"), Gender == "M") |> 
+    filter(str_detect(lipidClassSL, "Cer|GM3|Gb3|Gb4|SM|SPBP|SPB")) |> 
+    group_by(lipidClassSL, Gender,  Tissue) |>    
+    summarise(
+      FC = mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_M"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[ExpGroup == "Classic_M_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_M_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[ExpGroup == "Classic_M_ERT"]), 
+        y = log2(conc[ExpGroup == "Ctrl_M"]),
+        paired = FALSE,... = )$p.value)|> 
+  ungroup()
+
+d_FC_sum_SLclass_M <- d_FC_sum_SLclass_M |> 
+  group_by(Tissue, Gender) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"))
+
+
+d_FC_sum_SLclass_F <- d_sum_plot  |> 
+    mutate(conc = if_else(conc == 0, NA_real_, conc)) |> # PL and SL panel was not measured for F07G
+    filter(Tissue %in% c("Plasma", "Serum", "PLT"), Gender == "F") |> 
+    filter(str_detect(lipidClassSL, "Cer|GM3|Gb3|Gb4|SM|SPBP|SPB")) |> 
+    group_by(lipidClassSL, Gender, lipidClass,  Tissue) |>   
+    summarise(
+      FC = mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Ctrl_F"], na.rm = T), 
+      log2FC = log2(FC), 
+      absFC = abs(FC) ,
+      log2FC = log2(FC),
+      CV = sd(conc[ExpGroup == "Classic_F_ERT"], na.rm = T)/mean(conc[ExpGroup == "Classic_F_ERT"], na.rm = T),
+      p_value = t.test(
+        x = log2(conc[ExpGroup == "Classic_F_ERT"]), 
+        y = log2(conc[ExpGroup == "Ctrl_F"]),
+        paired = FALSE)$p.value)|> 
+  ungroup()
+
+
+d_FC_sum_SLclass_F <- d_FC_sum_SLclass_F |> 
+  group_by(Tissue, Gender) |> 
+  mutate(FDR = p.adjust(p_value, method = "fdr"))
+```
+
+# Tables S7 - S14
+
+```{r save-suppl-tables, message=FALSE, warning=FALSE, include=TRUE}
+
+# Table S11
+write_excel_csv(d_Plasma_wide, here("output/Table_S11_LipidConc_uM_PLASMA.csv"))
+
+# Table S12
+write_csv(d_Serum_wide, here("output/Table_S12_LipidConc_uM_SERUM.csv"))
+
+# Table S13
+write_csv(d_PLT_wide, here("output/Table_S13_LipidConc_uM_PLT.csv"))
+
+# Table S14
+d_FC_sum_comb_MF <- bind_rows(d_FC_sum)
+write_csv(d_FC_sum_comb_MF, here("output/Table_S14_Stats_SUMclass_FDvsCtrl_MFcomb.csv"))
+
+# Table S15
+d_FC_sum_sep_MF <- bind_rows(d_FC_M_sum,d_FC_F_sum)
+write_csv(d_FC_sum_sep_MF, here("output/Table_S15_Stats_SUMclass_FDvsCtrl_MFsep.csv"))
+
+# Table S16
+write_csv(d_FC_sum_SLclass, here("output/Table_S16_Stats_SUM_SLsubclass_FDvsCtrl_MFcomb.csv"))
+
+# Table S17
+d_FC_sum_SLclass_sep_MF <- bind_rows(d_FC_sum_SLclass_M,d_FC_sum_SLclass_F)
+write_csv(d_FC_sum_SLclass_sep_MF, here("output/Table_S17_Stats_SUM_SLsubclass_FDvsCtrl_MFsep.csv"))
+
+# Table S18
+d_FC_comb <- bind_rows(d_FC_SL, d_FC_OL)
+write_csv(d_FC_comb, here("output/Table_S18_Stats_FDvsCtrl_MF.csv"))
+
+# Table S19
+d_FC_M_comb <- bind_rows(d_FC_M_SL, d_FC_M_OL)
+write_csv(d_FC_M_comb, here("output/Table_S19_Stats_FDvsCtrl_M.csv"))
+
+# Table S20
+d_FC_F_comb <- bind_rows(d_FC_F_SL, d_FC_F_OL)
+write_csv(d_FC_F_comb, here("output/Table_S20_Stats_FDvsCtrl_F.csv"))
+
+# Other tables/summaries used for text
+
+d_clin_sum <- d_clin_plot |>
+  group_by(Gender, Group, Variable) |> 
+  summarise(
+    var_mean = mean(conc),
+    var_min = min(conc),
+    var_max = max(conc))
+
+
+```

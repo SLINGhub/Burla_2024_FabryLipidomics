@@ -1,0 +1,292 @@
+---
+title: "Plasma and Platelet Lipidome Changes in Fabry Disease"
+subtitle: "Data Pre-Processing"
+author: "Bo Burla"
+format: html
+---
+
+
+
+```{r setup}
+library(midar)
+
+library(here)
+library(tidyverse)
+source(here("R", "lipid_names_functions.R"))
+
+here::i_am("analysis/01_data-preprocessing.qmd")
+
+DATA_PATH <- here("data/LipidomicsAnalyses/")
+EXCLUDE_LIST <- c("SM 37:0;O2 [M>184]","SM 41:3;O2 [M>184]", "Hex4Cer 18:1;O2/16:1 [M>SphB")
+```
+
+
+```{r def-function}
+
+
+midar_process <- function(paneldatapath, metadatafile, CV_MAX, RQC_CURVE, drift_correction, process_qc_type,  features_to_keep = NULL, r2_min = 0.8, Tissue = "") {
+  
+  
+  mexp <- MidarExperiment(analysis_type = "lipidomics")
+  analysis_type(mexp) <- "lipidomics"
+  mexp <- read_masshunter_csv(mexp,file_dir_names = here(DATA_PATH, paneldatapath, "MH/"))
+  mexp<- read_msorganizer_xlm(mexp, filename = here(DATA_PATH,paneldatapath, metadatafile), TRUE)
+  mexp <- midar::normalize_by_istd(mexp)
+  mexp <- midar::quantitate_by_istd(mexp) 
+  mexp <- midar::calculate_qc_metrics(mexp)
+ # mexp <- add_lipid_class_transition(mexp)
+  
+  if(process_qc_type == "TQC"){
+    cv_tqc_max <- CV_MAX
+    cv_bqc_max <- NA
+  } else {
+    cv_tqc_max <- NA
+    cv_bqc_max <- CV_MAX
+  }
+    
+  mexp <- apply_qc_filter(mexp, 
+                          CV_TQC_max = cv_tqc_max, 
+                          CV_BQC_max = cv_bqc_max, 
+                          SB_RATIO_min = 3, 
+                          R2_min = r2_min, 
+                          RQC_CURVE = RQC_CURVE, 
+                          features_to_keep = features_to_keep)
+  
+  if(drift_correction){
+    mexp <- corr_drift_loess(data = mexp, qc_types = c(process_qc_type), apply_conditionally = TRUE, 
+                              within_batch = FALSE, log2_transform = TRUE, span = .75, max_cv_ratio_before_after =  1.00, extrapolate = TRUE)
+    mexp <- apply_qc_filter(mexp, CV_TQC_max = cv_tqc_max, CV_BQC_max = cv_bqc_max, SB_RATIO_min = 3,  RQC_CURVE = RQC_CURVE, 
+                            features_to_keep = features_to_keep, R2_min = r2_min)
+  }
+  
+  mexp@dataset_QC_filtered <- mexp@dataset_QC_filtered |> mutate(Tissue = Tissue, .after = "SAMPLE_ID")
+  mexp
+}
+
+
+```
+
+# PANELS
+## SLpanel PLT
+```{r proc-PLT-SL}
+mexp_SL_PLT <- midar_process("SLpanel_PLT", "FabryP_PLT_SLpanel_V1.xlsm", 
+                             CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "TQC", r2_min = 0.8, Tissue = "PLT")
+plot_x_vs_y(mexp_SL_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+
+```
+## SLpanel PLASMA
+```{r proc-PLASMA-SL}
+
+
+# Remark:  Cer 18:1;O2/24:0 [M-H2O>SphB] had one BQC that appears to deviate from the other BQCs. Since this is a major plasma ceramide species it will be kept even the CV(BQC) 
+# was 26.90%, a bit higher than the treshhold of 25%. 
+
+mexp_SL_PLASMA <- midar_process("SLpanel_PLASMA", "FabryP_PLASMA_SLpanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "BQC", r2_min = 0.8, Tissue = "Plasma",
+                             features_to_keep = c("Cer 18:1;O2/24:0 [M-H2O>SphB]"))
+plot_x_vs_y(mexp_SL_PLASMA, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+
+midar::plot_runscatter(mexp_SL_PLASMA, y_var = "Intensity",feature_filter = "Cer 18:1;O2/24:0",cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+
+```
+
+## BakerPanel PLT
+```{r proc-PLT-BakerPanel}}
+
+mexp_Baker_PLT <- midar_process("BakerPanel_PLT", "FabryP_PLT_BakerPanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "TQC", r2_min = 0.8, Tissue = "PLT")
+plot_x_vs_y(mexp_Baker_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 5)
+```
+
+## BakerPanel PLASMA
+```{r proc-PLASMA-BakerPanel}}
+
+datapath <- ""
+mexp_Baker_PLASMA <- midar_process("BakerPanel_PLASMA", "FabryP_PLASMA_BakerPanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "BQC", r2_min = 0.8, Tissue = "Plasma")
+plot_x_vs_y(mexp_Baker_PLASMA, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 5)
+```
+
+## Gb3panel PLT
+```{r proc-PLT-Gb3}
+mexp_Gb3_PLT <- midar_process("Gb3Panel_PLT", "FabryP_PLT_Gb3panel_V1.xlsm", CV_MAX = 25, RQC_CURVE = NA, r2_min = NA, 
+                             drift_correction = TRUE, process_qc_type = "TQC",  Tissue = "PLT")
+plot_x_vs_y(mexp_Gb3_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+```
+
+## Gb4panel PLT
+```{r proc-PLT-Gb4}
+
+mexp_Gb4_PLT <- midar_process("Gb4Panel_PLT", "FabryP_PLT_Gb4panel_V1.xlsm", CV_MAX = 25, RQC_CURVE = NA, r2_min = NA, 
+                             drift_correction = TRUE, process_qc_type = "TQC",  Tissue = "PLT")
+plot_x_vs_y(mexp_Gb4_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 2)
+```
+## GLOBOpanel PLASMA
+```{r proc-PLASMA-GloboPanel}
+
+mexp_Globo_PLASMA <- midar_process("GloboPanel_PLASMA", "FabryP_PLASMA_GLOBOpanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "BQC",  features_to_keep = c("Hex3Cer 18:1;O2/18:0 [M>SphB]"), Tissue = "Plasma")
+plot_x_vs_y(mexp_Globo_PLASMA, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+```
+## S1Ppanel PLT
+```{r proc-PLT-S1P}
+
+mexp_S1P_PLT <- midar_process("S1P_PLT", "FabryP_PLT_S1Ppanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1, 
+                             drift_correction = TRUE, process_qc_type = "TQC", r2_min = .5, Tissue = "PLT")
+plot_x_vs_y(mexp_S1P_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+```
+## S1Ppanel PLASMA
+```{r proc-PLASMA-S1P}
+
+mexp_S1P_PLASMA <- midar_process("S1P_PLASMA", "FabryP_PLASMA_S1Ppanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "BQC",r2_min = 0.8, Tissue = "Plasma")
+
+plot_x_vs_y(mexp_S1P_PLASMA, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+```
+## S1Ppanel SERUM
+```{r proc-SERUM-S1P}
+
+mexp_S1P_SERUM <- midar_process("S1P_SERUM", "FabryP_SERUM_S1Ppanel_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = TRUE, process_qc_type = "BQC", r2_min = 0.8, Tissue = "Serum")
+
+plot_x_vs_y(mexp_S1P_SERUM, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+```
+
+## LysoGb3 Panel SERUM
+```{r proc-SERUM-LysoGb3}
+
+mexp_LysoGb3_SERUM <- midar_process("LysoGb3_SERUM", "FabryP_SERUM_LysoGb3_V1.xlsm", CV_MAX = 25, RQC_CURVE = 1,
+                             drift_correction = FALSE, process_qc_type = "BQC", r2_min = 0.8, Tissue = "Serum", features_to_keep = c("LysoGb3(+34) [282]"))
+
+plot_x_vs_y(mexp_LysoGb3_SERUM, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+
+midar::plot_runscatter(mexp_LysoGb3_SERUM, y_var = "Intensity",feature_filter = "IS",cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+midar::plot_runscatter(mexp_LysoGb3_SERUM, y_var = "Intensity",feature_filter = "IS",filter_exclude = TRUE, cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+
+
+```
+
+## LysoGb3 Panel PLT
+```{r proc-SERUM-LysoGb3}
+
+mexp_LysoGb3_PLT <- midar_process("LysoGb3_PLT", "FabryP_PLT_LysoGb3_V1.xlsm", CV_MAX = 25, RQC_CURVE = NA,
+                             drift_correction = FALSE, process_qc_type = "BQC", r2_min = NA, Tissue = "PLT", features_to_keep = NULL)
+
+plot_x_vs_y(mexp_LysoGb3_PLT, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+
+midar::plot_runscatter(mexp_LysoGb3_PLT, y_var = "Intensity",feature_filter = "IS",cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+midar::plot_runscatter(mexp_LysoGb3_PLT, y_var = "Intensity",feature_filter = "IS",filter_exclude = TRUE, cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+
+
+```
+
+## Ga2 Panel SERUM
+```{r proc-SERUM-Ga2}
+
+mexp_Ga2_SERUM <- midar_process(paneldatapath = "Ga2_SERUM", 
+                                metadatafile = "FabryP_SERUM_Ga2_V1.xlsm", 
+                                CV_MAX = 35, 
+                                RQC_CURVE = NA,
+                                drift_correction = FALSE, 
+                                process_qc_type = "BQC", r2_min = NA, Tissue = "Serum")
+
+plot_x_vs_y(mexp_Ga2_SERUM, x = "Int_CV_SPL", y = "conc_CV_SPL", ncol = 3)
+
+midar::plot_runscatter(mexp_Ga2_SERUM, y_var = "Intensity",feature_filter = "IS",cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+midar::plot_runscatter(mexp_Ga2_SERUM, y_var = "Intensity",feature_filter = "IS",filter_exclude = TRUE, cap_values = TRUE, outputPDF=FALSE, rows_page = 2, cols_page = 2)
+
+
+```
+
+
+# DATA FUSION
+
+```{r data-fusion}
+
+d_PLT <- bind_rows(
+    mexp_SL_PLT@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "^Hex3|^Hex4|AcylCarnitine")),
+    mexp_Baker_PLT@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "Cer|^SM|^S1P|Hex|^Sph")),
+    mexp_Gb3_PLT@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "^Hex4|^Hex2|^Hex1|^HexCer")), 
+    mexp_Gb4_PLT@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "^Hex3|^Hex2|^Hex1|^HexCer")), 
+    mexp_S1P_PLT@dataset_QC_filtered,
+    mexp_LysoGb3_PLT@dataset_QC_filtered  |> filter(!str_detect(FEATURE_NAME, "^Sph")),
+    .id = "dataset_no" 
+    ) |> 
+  filter(!(FEATURE_NAME %in% EXCLUDE_LIST)) |> 
+  filter(QC_TYPE %in% c("SPL", "TQC", "NIST", "LTR")) |> 
+  arrange(FEATURE_NAME, SAMPLE_ID) |> 
+  select(SAMPLE_ID, Tissue, QC_TYPE, FEATURE_NAME, Concentration) |> 
+  filter(!str_detect(SAMPLE_ID, "TQC00")) |> 
+  mutate(Concentration = Concentration * 1e6)
+
+d_PLT <- d_PLT |> 
+  rename(Compound = FEATURE_NAME) |> 
+  mutate(Compound = str_replace(Compound, "\\[104\\]", "(104)")) |> 
+  get_transition_info(add_sum_composition = TRUE, add_chain_info = TRUE) |> 
+  mutate(lipidClassSL = if_else(str_detect(lipidClassSL, "Sph"), "SPB", lipidClassSL),
+         lipidClassSL = if_else(lipidClassSL == "SM" & str_detect(Compound, "\\:0"), "SM 18:0;O2", lipidClassSL)) 
+
+
+d_PLT  <- d_PLT |> 
+  mutate(feature_group = if_else(str_detect(CompoundName, "^LP"), str_remove(CompoundName, " a| b"), CompoundName)) |> 
+  group_by(SAMPLE_ID, Tissue, QC_TYPE, feature_group) |> 
+  summarise(Concentration = sum(Concentration)) |> 
+  ungroup() |> 
+  rename(CompoundName = feature_group)
+
+d_PLT_wide <- d_PLT |> 
+  filter(QC_TYPE == "SPL") |> 
+  pivot_wider(id_cols = SAMPLE_ID:QC_TYPE, names_from = "CompoundName", 
+                                   values_from = "Concentration") |> 
+  arrange(SAMPLE_ID)
+
+write_csv(d_PLT_wide, file = here("data/processed/FabryP_PLATELETS_Processed.csv"))
+
+d_PLASMA_SERUM <- bind_rows(
+    mexp_SL_PLASMA@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "^Hex3|^Hex4")),
+    mexp_Baker_PLASMA@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "Cer|^SM|^S1P|^Hex")),
+    mexp_Globo_PLASMA@dataset_QC_filtered |> filter(!str_detect(FEATURE_NAME, "^Hex2|^Hex1|^HexCer")),
+    mexp_S1P_PLASMA@dataset_QC_filtered,
+    mexp_S1P_SERUM@dataset_QC_filtered,
+    mexp_LysoGb3_SERUM@dataset_QC_filtered |> mutate(Tissue = "Serum") |> filter(!str_detect(FEATURE_NAME, "^Sph")),
+    mexp_Ga2_SERUM@dataset_QC_filtered |> 
+      mutate(Tissue = "Serum") |> 
+      filter(str_detect(FEATURE_NAME, "^Ga2")),
+    .id = "dataset_no" 
+    ) |> 
+  filter(!(FEATURE_NAME %in% EXCLUDE_LIST)) |> 
+  filter(QC_TYPE %in% c("SPL", "BQC", "NIST", "LTR")) |> 
+  arrange(FEATURE_NAME, SAMPLE_ID) |> 
+  select(SAMPLE_ID, Tissue, QC_TYPE, FEATURE_NAME, Concentration)
+
+d_PLASMA_SERUM <- d_PLASMA_SERUM |>
+  rename(Compound = FEATURE_NAME) |> 
+  mutate(Compound = str_replace(Compound, "\\[104\\]", "(104)")) |> 
+  get_transition_info(add_sum_composition = TRUE, add_chain_info = TRUE) |> 
+  mutate(lipidClassSL = if_else(str_detect(lipidClassSL, "Sph"), "SPB", lipidClassSL),
+         lipidClassSL = if_else(lipidClassSL == "SM" & str_detect(Compound, "\\:0"), "SM 18:0;O2", lipidClassSL))
+
+d_PLASMA_SERUM  <- d_PLASMA_SERUM |> 
+  mutate(feature_group = if_else(str_detect(CompoundName, "^LP"), str_remove(CompoundName, " a| b"), CompoundName)) |> 
+  group_by(SAMPLE_ID, Tissue, QC_TYPE, feature_group) |> 
+  summarise(Concentration = sum(Concentration)) |> 
+  ungroup() |> 
+  rename(CompoundName = feature_group)
+
+
+d_PLASMA_wide <- d_PLASMA_SERUM |> 
+  filter(Tissue == "Plasma", QC_TYPE == "SPL") |> 
+  pivot_wider(id_cols = SAMPLE_ID:QC_TYPE, names_from = "CompoundName", values_from = "Concentration") |> 
+  arrange(SAMPLE_ID)
+
+write_csv(d_PLASMA_wide, file = here("data/processed/FabryP_PLASMA_Processed.csv"))
+
+d_SERUM_wide <- d_PLASMA_SERUM |> 
+  filter(Tissue == "Serum", QC_TYPE == "SPL") |> 
+  pivot_wider(id_cols = SAMPLE_ID:QC_TYPE, names_from = "CompoundName", values_from = "Concentration") |> 
+  arrange(SAMPLE_ID)
+
+write_csv(d_SERUM_wide, file = here("data/processed/FabryP_SERUM_Processed.csv"))
+
+```
