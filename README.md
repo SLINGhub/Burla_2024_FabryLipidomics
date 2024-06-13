@@ -1,12 +1,10 @@
-### R scripts used in Manuscript 
-
 ## Plasma and Platelet Lipidome Changes in Fabry Disease
 
-*Bo Burla, Jeongah Oh, Nathalie Piraud, Eduardo Meyer, Ding Mei, Anne K Bendt, Jan-Dirk Studt, Beat M Frey, Federico Torta, Albina Nowak, Markus R Wenk, and Pierre-Alexandre Krayenbuhl*
+*Bo Burla, Jeongah Oh, Albina Nowak, Nathalie Piraud, Eduardo Meyer, Ding Mei, Anne K Bendt, Jan-Dirk Studt, Beat M Frey, Federico Torta, Markus R Wenk, and Pierre-Alexandre Krayenbuehl*
 
 Affiliations of main authors: *Singapore Lipidomics Incubator, Life Sciences Institute; Department of Biochemistry Yong Loo Lin School of Medicine; National University of Singapore*
 
-2023
+2024
 
 ## Summary
 
